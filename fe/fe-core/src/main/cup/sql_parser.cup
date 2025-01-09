@@ -711,6 +711,8 @@ terminal String UNMATCHED_STRING_LITERAL;
 terminal String COMMENTED_PLAN_HINTS;
 terminal String KW_CRON;
 
+terminal DOUBLE_DOLLAR;
+
 // Statement that the result of this parser.
 nonterminal List<StatementBase> stmts;
 nonterminal StatementBase stmt, show_stmt, show_param, help_stmt, load_stmt,
@@ -746,6 +748,8 @@ nonterminal describe_command, opt_full, opt_inner, opt_outer, from_or_in, keys_o
 nonterminal String user, opt_user, opt_using_charset;
 nonterminal UserIdentity user_identity;
 nonterminal String quantity;
+
+nonterminal String opt_inline_function;
 
 // Description of user
 nonterminal UserDesc grant_user;
@@ -1018,6 +1022,7 @@ precedence nonassoc COMMA;
 precedence nonassoc STRING_LITERAL;
 precedence nonassoc KW_COLUMNS;
 precedence nonassoc KW_WITH;
+precedence nonassoc DOUBLE_DOLLAR;
 
 precedence left KW_FULL, KW_MERGE;
 precedence left DOT;
@@ -1876,9 +1881,9 @@ create_stmt ::=
     :}
     /* Function */
     | KW_CREATE opt_var_type:type opt_aggregate:isAggregate KW_FUNCTION opt_if_not_exists:ifNotExists function_name:functionName LPAREN func_args_def:args RPAREN
-            KW_RETURNS type_def:returnType opt_intermediate_type:intermediateType opt_properties:properties
+            KW_RETURNS type_def:returnType opt_intermediate_type:intermediateType opt_properties:properties opt_inline_function:inlineFunction
     {:
-        RESULT = new CreateFunctionStmt(type, ifNotExists, isAggregate, functionName, args, returnType, intermediateType, properties);
+        RESULT = new CreateFunctionStmt(type, ifNotExists, isAggregate, functionName, args, returnType, intermediateType, properties, inlineFunction);
     :}
     | KW_CREATE opt_var_type:type KW_ALIAS KW_FUNCTION opt_if_not_exists:ifNotExists function_name:functionName LPAREN func_args_def:args RPAREN
             KW_WITH KW_PARAMETER LPAREN opt_ident_list:parameters RPAREN KW_AS expr:func
@@ -2073,6 +2078,17 @@ create_stmt ::=
     | KW_CREATE KW_STAGE opt_if_not_exists:ifNotExists ident:stageName KW_PROPERTIES opt_key_value_map:properties
     {:
         RESULT = new CreateStageStmt(ifNotExists, stageName, properties);
+    :}
+    ;
+
+opt_inline_function ::=
+    /* empty */
+    {:
+        RESULT = "";
+    :}
+    | KW_AS DOUBLE_DOLLAR STRING_LITERAL:inlineFunction DOUBLE_DOLLAR
+    {:
+        RESULT = inlineFunction;
     :}
     ;
 

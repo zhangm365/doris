@@ -1385,7 +1385,7 @@ public class SessionVariable implements Serializable, Writable {
     private double nereidsCboPenaltyFactor = 0.7;
 
     @VariableMgr.VarAttr(name = ENABLE_NEREIDS_TRACE)
-    private boolean enableNereidsTrace = false;
+    private boolean enableNereidsTrace = true;
 
     @VariableMgr.VarAttr(name = ENABLE_EXPR_TRACE)
     private boolean enableExprTrace = false;
@@ -1490,7 +1490,7 @@ public class SessionVariable implements Serializable, Writable {
     public boolean enableFallbackToOriginalPlanner = false;
 
     @VariableMgr.VarAttr(name = ENABLE_NEREIDS_TIMEOUT, needForward = true)
-    public boolean enableNereidsTimeout = true;
+    public boolean enableNereidsTimeout = false;
 
     @VariableMgr.VarAttr(name = "nereids_timeout_second", needForward = true)
     public int nereidsTimeoutSecond = 30;
@@ -1629,7 +1629,7 @@ public class SessionVariable implements Serializable, Writable {
     public int useFixReplica = -1;
 
     @VariableMgr.VarAttr(name = DUMP_NEREIDS_MEMO)
-    public boolean dumpNereidsMemo = false;
+    public boolean dumpNereidsMemo = true;
 
     @VariableMgr.VarAttr(name = "memo_max_group_expression_size")
     public int memoMaxGroupExpressionSize = 10000;

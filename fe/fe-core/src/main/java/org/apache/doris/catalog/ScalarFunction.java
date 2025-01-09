@@ -19,6 +19,7 @@ package org.apache.doris.catalog;
 
 import org.apache.doris.analysis.CreateFunctionStmt;
 import org.apache.doris.analysis.FunctionName;
+import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.util.URI;
 import org.apache.doris.thrift.TFunction;
@@ -53,6 +54,10 @@ public class ScalarFunction extends Function {
     private String prepareFnSymbol;
     @SerializedName("cfs")
     private String closeFnSymbol;
+    @SerializedName(value = "inputType")
+    private String inputType;
+    @SerializedName(value = "content")
+    private String content;
 
     // Only used for serialization
     protected ScalarFunction() {
@@ -178,6 +183,8 @@ public class ScalarFunction extends Function {
         symbolName = other.symbolName;
         prepareFnSymbol = other.prepareFnSymbol;
         closeFnSymbol = other.closeFnSymbol;
+        inputType = other.inputType;
+        content = other.content;
     }
 
     @Override
@@ -207,6 +214,22 @@ public class ScalarFunction extends Function {
 
     public String getCloseFnSymbol() {
         return closeFnSymbol;
+    }
+
+    public void setInputType(String inputType) {
+        this.inputType = inputType;
+    }
+
+    public String getInputType() {
+        return inputType;
+    }
+
+    public void setContent(String content) {
+        this.content = content;
+    }
+
+    public String getContent() {
+        return content;
     }
 
     @Override
@@ -254,6 +277,14 @@ public class ScalarFunction extends Function {
         } else {
             fn.getScalarFn().setSymbol("");
         }
+
+        if (inputType != null) {
+            fn.setInputType(inputType);
+        }
+        if (content != null) {
+            fn.setContent(content);
+        }
+
         return fn;
     }
 
@@ -275,5 +306,85 @@ public class ScalarFunction extends Function {
         properties.put(CreateFunctionStmt.MD5_CHECKSUM, checksum);
         properties.put(CreateFunctionStmt.SYMBOL_KEY, symbolName);
         return new Gson().toJson(properties);
+    }
+
+    public static class ScalarFunctionBuilder {
+        TFunctionBinaryType binaryType;
+        FunctionName name;
+        Type[] argTypes;
+        Type retType;
+        boolean hasVarArgs;
+        String objectFile;
+        String symbolName;
+        String inputType;
+        String content;
+
+        private ScalarFunctionBuilder(TFunctionBinaryType binaryType) {
+            this.binaryType = binaryType;
+        }
+
+        public static ScalarFunction.ScalarFunctionBuilder createUdfBuilder(TFunctionBinaryType binaryType) {
+            return new ScalarFunction.ScalarFunctionBuilder(binaryType);
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder name(FunctionName name) {
+            this.name = name;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder argsType(Type[] argTypes) {
+            this.argTypes = argTypes;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder retType(Type type) {
+            this.retType = type;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder hasVarArgs(boolean hasVarArgs) {
+            this.hasVarArgs = hasVarArgs;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder objectFile(String objectFile) {
+            this.objectFile = objectFile;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder symbolName(String symbolName) {
+            this.symbolName = symbolName;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder inputType(String inputType) {
+            this.inputType = inputType;
+            return this;
+        }
+
+        public ScalarFunction.ScalarFunctionBuilder content(String content) {
+            this.content = content;
+            return this;
+        }
+
+        public ScalarFunction build() {
+            ScalarFunction scalarFunction =
+                    new ScalarFunction(name, Arrays.asList(argTypes), retType, hasVarArgs, true);
+            scalarFunction.setBinaryType(binaryType);
+            scalarFunction.setSymbolName(symbolName);
+            scalarFunction.setInputType(inputType);
+            scalarFunction.setContent(content);
+            if (content == null && objectFile != null) {
+                try {
+                    scalarFunction.setLocation(URI.create(objectFile));
+                } catch (AnalysisException e) {
+                    throw new RuntimeException(e);
+                }
+            } else {
+                scalarFunction.setLocation(null);
+            }
+
+            return scalarFunction;
+        }
     }
 }

@@ -720,7 +720,7 @@ unsupportedCreateStatement
         (TABLES | AGGREGATE)? FUNCTION (IF NOT EXISTS)?
         functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
         RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
-        properties=propertyClause?                                              #createUserDefineFunction
+        properties=propertyClause?? inlineFunction?                             #createUserDefineFunction
     | CREATE (GLOBAL | SESSION | LOCAL)? ALIAS FUNCTION (IF NOT EXISTS)?
         functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
         WITH PARAMETER LEFT_PAREN parameters=identifierSeq? RIGHT_PAREN
@@ -756,6 +756,9 @@ unsupportedCreateStatement
     | CREATE STAGE (IF NOT EXISTS)? name=identifier properties=propertyClause?  #createStage
     ;
 
+inlineFunction
+    : AS ATTACHMENT
+    ;
 workloadPolicyActions
     : workloadPolicyAction (COMMA workloadPolicyAction)*
     ;

@@ -616,6 +616,13 @@ STRING_LITERAL
     | 'R"'(~'"')* '"'
     ;
 
+DOUBLE_DOLLAR: '$$';
+
+ATTACHMENT
+    : DOUBLE_DOLLAR .*? DOUBLE_DOLLAR
+    ;
+
+
 LEADING_STRING
     : LEFT_BRACE
     | RIGHT_BRACE

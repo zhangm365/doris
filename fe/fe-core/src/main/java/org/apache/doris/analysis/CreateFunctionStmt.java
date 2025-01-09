@@ -26,6 +26,7 @@ import org.apache.doris.catalog.Function.NullableMode;
 import org.apache.doris.catalog.FunctionUtil;
 import org.apache.doris.catalog.MapType;
 import org.apache.doris.catalog.ScalarFunction;
+import org.apache.doris.catalog.ScalarFunction.ScalarFunctionBuilder;
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.StructType;
 import org.apache.doris.catalog.Type;
@@ -49,6 +50,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedMap;
 import io.grpc.ManagedChannel;
 import io.grpc.netty.NettyChannelBuilder;
+import lombok.Getter; // THIRD_PARTY_PACKAGE
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -115,7 +117,7 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
     private final Map<String, String> properties;
     private final List<String> parameters;
     private final Expr originFunction;
-    TFunctionBinaryType binaryType = TFunctionBinaryType.JAVA_UDF;
+    TFunctionBinaryType binaryType;
 
     // needed item set after analyzed
     private String userFile;
@@ -131,9 +133,15 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
     // timeout for both connection and read. 10 seconds is long enough.
     private static final int HTTP_TIMEOUT_MS = 10000;
 
+    @Getter
+    private final String content;
+
+    public static final String INPUT_TYPE = "input";
+
     public CreateFunctionStmt(SetType type, boolean ifNotExists, boolean isAggregate, FunctionName functionName,
                               FunctionArgsDef argsDef,
-                              TypeDef returnType, TypeDef intermediateType, Map<String, String> properties) {
+                              TypeDef returnType, TypeDef intermediateType, Map<String, String> properties,
+                              String content) {
         this.type = type;
         this.ifNotExists = ifNotExists;
         this.functionName = functionName;
@@ -150,12 +158,13 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
         this.isTableFunction = false;
         this.parameters = ImmutableList.of();
         this.originFunction = null;
+        this.content = content;
     }
 
     public CreateFunctionStmt(SetType type, boolean ifNotExists, FunctionName functionName,
             FunctionArgsDef argsDef,
             TypeDef returnType, TypeDef intermediateType, Map<String, String> properties) {
-        this(type, ifNotExists, false, functionName, argsDef, returnType, intermediateType, properties);
+        this(type, ifNotExists, false, functionName, argsDef, returnType, intermediateType, properties, "");
         this.isTableFunction = true;
     }
 
@@ -176,6 +185,7 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
         this.isTableFunction = false;
         this.returnType = new TypeDef(Type.VARCHAR);
         this.properties = ImmutableSortedMap.of();
+        this.content = "";
     }
 
     public SetType getType() {
@@ -202,12 +212,23 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
     public void analyze(Analyzer analyzer) throws UserException {
         super.analyze(analyzer);
 
+        String type = properties.getOrDefault(BINARY_TYPE, "JAVA_UDF");
+        binaryType = getFunctionBinaryType(type);
+        if (binaryType == null) {
+            throw new AnalysisException("unknown function type");
+        }
+        if (type.equals("NATIVE")) {
+            throw new AnalysisException("do not support 'NATIVE' udf type after doris version 1.2.0,"
+                + "please use JAVA_UDF or RPC instead");
+        }
+
+        analyzeCommon(analyzer);
+
         // https://github.com/apache/doris/issues/17810
         // this error report in P0 test, so we suspect that it is related to concurrency
         // add this change to test it.
         if (Config.use_fuzzy_session_variable) {
             synchronized (CreateFunctionStmt.class) {
-                analyzeCommon(analyzer);
                 // check
                 if (isAggregate) {
                     analyzeUda();
@@ -215,12 +236,20 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
                     analyzeAliasFunction();
                 } else if (isTableFunction) {
                     analyzeTableFunction();
-                } else {
+                } else if (binaryType == TFunctionBinaryType.JAVA_UDF) {
+                    try {
+                        computeObjectChecksum();
+                    } catch (IOException | NoSuchAlgorithmException e) {
+                        throw new AnalysisException("cannot to compute object's checksum. err: " + e.getMessage());
+                    }
                     analyzeUdf();
+                } else if (binaryType == TFunctionBinaryType.PYTHON_UDF) {
+                    analyzePython();
+                } else {
+                    throw new AnalysisException("unknown binaryType");
                 }
             }
         } else {
-            analyzeCommon(analyzer);
             // check
             if (isAggregate) {
                 analyzeUda();
@@ -228,8 +257,17 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
                 analyzeAliasFunction();
             } else if (isTableFunction) {
                 analyzeTableFunction();
-            } else {
+            } else if (binaryType == TFunctionBinaryType.JAVA_UDF) {
+                try {
+                    computeObjectChecksum();
+                } catch (IOException | NoSuchAlgorithmException e) {
+                    throw new AnalysisException("cannot to compute object's checksum. err: " + e.getMessage());
+                }
                 analyzeUdf();
+            } else if (binaryType == TFunctionBinaryType.PYTHON_UDF) {
+                analyzePython();
+            } else {
+                throw new AnalysisException("unknown binaryType");
             }
         }
     }
@@ -257,6 +295,25 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
             intermediateType = returnType;
         }
 
+        userFile = properties.getOrDefault(FILE_KEY, properties.get(OBJECT_FILE_KEY));
+        if (Strings.isNullOrEmpty(userFile)) {
+            throw new AnalysisException("No 'file' or 'object_file' in properties");
+        }
+
+        // static_load the default value is false, equal null means false
+        Boolean staticLoad = parseBooleanFromProperties(IS_STATIC_LOAD);
+        if (staticLoad != null && staticLoad) {
+            isStaticLoad = true;
+        }
+        String expirationTimeString = properties.get(EXPIRATION_TIME);
+        if (expirationTimeString != null) {
+            long timeMinutes = Long.parseLong(expirationTimeString);
+            if (timeMinutes <= 0) {
+                throw new AnalysisException("expirationTime should greater than zero: ");
+            }
+            this.expirationTime = timeMinutes;
+        }
+        /******
         String type = properties.getOrDefault(BINARY_TYPE, "JAVA_UDF");
         binaryType = getFunctionBinaryType(type);
         if (binaryType == null) {
@@ -267,10 +324,12 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
                                     + "please use JAVA_UDF or RPC instead");
         }
 
-        userFile = properties.getOrDefault(FILE_KEY, properties.get(OBJECT_FILE_KEY));
-        //        if (Strings.isNullOrEmpty(userFile)) {
-        //            throw new AnalysisException("No 'file' or 'object_file' in properties");
-        //        }
+
+         //        userFile = properties.getOrDefault(FILE_KEY, properties.get(OBJECT_FILE_KEY));
+         //         if (Strings.isNullOrEmpty(userFile)) {
+         //         throw new AnalysisException("No 'file' or 'object_file' in properties");
+         //         }
+
         if (!Strings.isNullOrEmpty(userFile) && binaryType != TFunctionBinaryType.RPC) {
             try {
                 computeObjectChecksum();
@@ -304,6 +363,7 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
                 this.expirationTime = timeMinutes;
             }
         }
+         ***********/
     }
 
     private Boolean parseBooleanFromProperties(String propertyString) throws AnalysisException {
@@ -429,6 +489,20 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
     }
 
     private void analyzeUdf() throws AnalysisException {
+
+        String md5sum = properties.get(MD5_CHECKSUM);
+        if (md5sum != null && !md5sum.equalsIgnoreCase(checksum)) {
+            throw new AnalysisException("library's checksum is not equal with input, checksum=" + checksum);
+        }
+
+        FunctionUtil.checkEnableJavaUdf();
+
+        // always_nullable the default value is true, equal null means true
+        Boolean isReturnNull = parseBooleanFromProperties(IS_RETURN_NULL);
+        if (isReturnNull != null && !isReturnNull) {
+            returnNullMode = NullableMode.ALWAYS_NOT_NULLABLE;
+        }
+
         String symbol = properties.get(SYMBOL_KEY);
         if (Strings.isNullOrEmpty(symbol)) {
             throw new AnalysisException("No 'symbol' in properties");
@@ -895,6 +969,12 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
             stringBuilder.append(")");
 
         }
+        //        if (!StringUtils.isEmpty(content)) {    // Check if the content string is not empty
+        //            // Remove leading and trailing double quotes from content and append it to stringBuilder
+        //            stringBuilder.append(StringUtils.strip(content, "\""));
+        //        }
+        stringBuilder.append(content);
+
         return stringBuilder.toString();
     }
 
@@ -906,5 +986,76 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
     @Override
     public StmtType stmtType() {
         return StmtType.CREATE;
+    }
+
+
+    private void analyzePython() throws AnalysisException {
+
+        String inputType = properties.getOrDefault(CreateFunctionStmt.INPUT_TYPE, "scalar");
+        // input: 'arrow' or 'scalar'
+        if (!inputType.equalsIgnoreCase("arrow") && !inputType.equalsIgnoreCase("scalar")) {
+            throw new AnalysisException("unknown input type:" + inputType);
+        }
+
+        String content = this.getContent();
+        boolean isInline = content != null;
+
+        // String objectFile = properties.get(CreateFunctionStmt.FILE_KEY);
+        if (isInline && !StringUtils.equals(userFile, "inline")) {
+            throw new AnalysisException("inline function file, objectFile = " + userFile);
+        }
+
+        // URI location = null;
+
+        if (!isInline) {
+            /*
+            if (!Strings.isNullOrEmpty(userFile)) {
+                location = URI.create(userFile);
+            }
+            else {
+                location = null;
+            }
+            */
+            // compute MD5 checkSum
+            try {
+                computeObjectChecksum();
+            } catch (IOException | NoSuchAlgorithmException e) {
+                throw new AnalysisException("cannot to compute object's checksum. err: " + e.getMessage());
+            }
+        }
+
+        String checksum = properties.get(MD5_CHECKSUM);
+        checksum = "3cf5567041a580de56155aa5cbaefd76";
+        String symbol = properties.get(CreateFunctionStmt.SYMBOL_KEY);
+        if (Strings.isNullOrEmpty(symbol)) {
+            throw new AnalysisException("No 'symbol' in properties");
+        }
+        ScalarFunctionBuilder scalarFunctionBuilder =
+                ScalarFunctionBuilder.createUdfBuilder(TFunctionBinaryType.PYTHON_UDF);
+        scalarFunctionBuilder
+            .name(functionName)
+            .argsType(argsDef.getArgTypes())
+            .retType(returnType.getType())
+            .hasVarArgs(argsDef.isVariadic())
+            .objectFile(userFile)
+            .inputType(inputType)
+            .symbolName(symbol).content(content);
+
+        function = scalarFunctionBuilder.build();
+        function.setChecksum(checksum);
+        function.setNullableMode(returnNullMode);
+        function.setStaticLoad(isStaticLoad);
+        function.setExpirationTime(expirationTime);
+        /*
+        function = ScalarFunction.createUdf(binaryType,
+            functionName, argsDef.getArgTypes(),
+            returnType.getType(), argsDef.isVariadic(),
+            location, symbol, "", "");
+        function.setChecksum(checksum);
+        function.setNullableMode(returnNullMode);
+        function.setStaticLoad(isStaticLoad);
+        function.setExpirationTime(expirationTime);
+       */
+
     }
 }

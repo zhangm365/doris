@@ -588,6 +588,7 @@ import org.apache.doris.qe.SqlModeHelper;
     tokenIdMap.put(new Integer(SqlParserSymbols.BITXOR), "^");
     tokenIdMap.put(new Integer(SqlParserSymbols.NUMERIC_OVERFLOW), "NUMERIC OVERFLOW");
     tokenIdMap.put(new Integer(SqlParserSymbols.PLACEHOLDER), "?");
+    tokenIdMap.put(new Integer(SqlParserSymbols.DOUBLE_DOLLAR), "DOUBLE DOLLAR");
   }
 
   public static boolean isKeyword(Integer tokenId) {
@@ -675,6 +676,9 @@ EolHintBegin = "--" " "* "+"
 CommentedHintBegin = "/*" " "* "+"
 CommentedHintEnd = "*/"
 
+// note: the function content is not empty.
+//DoubleDollarLiteral = \$\$([\s\S].*?)\$\$
+
 // Both types of plan hints must appear within a single line.
 HintContent = " "* "+" [^\r\n]*
 
@@ -700,6 +704,7 @@ EndOfLineComment = "--" !({HintContent}|{ContainsLineTerminator}) {LineTerminato
 
 "..." { return newToken(SqlParserSymbols.DOTDOTDOT, null); }
 "->" { return newToken(SqlParserSymbols.ARROW, null); }
+"$$" { return newToken(SqlParserSymbols.DOUBLE_DOLLAR, null); }
 
 // single-character tokens
 "," { return newToken(SqlParserSymbols.COMMA, null); }
@@ -822,6 +827,20 @@ EndOfLineComment = "--" !({HintContent}|{ContainsLineTerminator}) {LineTerminato
 
   return newToken(SqlParserSymbols.DECIMAL_LITERAL, decimal_val);
 }
+
+//{DoubleDollarLiteral} {
+//    System.out.println("Matched DOUBLE_DOLLAR: " + yytext());
+//
+//    // 提取内容：去掉起始和结束的 $$
+//    String content = yytext().substring(2, yytext().length() - 2);
+//
+//    // 处理函数体中的转义字符（如果需要）
+//    content = escapeBackSlash(content); // 处理反斜杠转义字符
+//
+//    // 注意：`$$ body $$` 通常不需要额外替换引号转义，如单引号和双引号。
+//
+//    return newToken(SqlParserSymbols.STRING_LITERAL, content);   // 封装并返回
+//}
 
 {Comment} { /* ignore */ }
 {Whitespace} { /* ignore */ }

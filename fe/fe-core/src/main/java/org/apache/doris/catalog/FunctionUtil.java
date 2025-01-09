@@ -29,7 +29,9 @@ import org.apache.doris.nereids.trees.expressions.functions.udf.AliasUdf;
 import org.apache.doris.nereids.trees.expressions.functions.udf.JavaUdaf;
 import org.apache.doris.nereids.trees.expressions.functions.udf.JavaUdf;
 import org.apache.doris.nereids.trees.expressions.functions.udf.JavaUdtf;
+import org.apache.doris.nereids.trees.expressions.functions.udf.PythonUdf;
 import org.apache.doris.nereids.types.DataType;
+import org.apache.doris.thrift.TFunctionBinaryType;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -228,7 +230,12 @@ public class FunctionUtil {
                 if (function.isUDTFunction()) {
                     JavaUdtf.translateToNereidsFunction(dbName, ((ScalarFunction) function));
                 } else {
-                    JavaUdf.translateToNereidsFunction(dbName, ((ScalarFunction) function));
+                    TFunctionBinaryType binaryType = function.getBinaryType();
+                    if (binaryType == TFunctionBinaryType.JAVA_UDF) {
+                        JavaUdf.translateToNereidsFunction(dbName, ((ScalarFunction) function));
+                    } else if (binaryType == TFunctionBinaryType.PYTHON_UDF) {
+                        PythonUdf.translateToNereidsFunction(dbName, ((ScalarFunction) function));
+                    }
                 }
             } else if (function instanceof AggregateFunction) {
                 JavaUdaf.translateToNereidsFunction(dbName, ((AggregateFunction) function));
