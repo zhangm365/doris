@@ -65,6 +65,9 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
 
     _expr_name = fmt::format("VectorizedFnCall[{}](arguments={},return={})", _fn.name.function_name,
                              get_child_names(), _data_type->get_name());
+    
+    LOG(INFO) << "zhangmao_expr_name: " << _expr_name;
+
     if (_fn.binary_type == TFunctionBinaryType::RPC) {
         _function = FunctionRPC::create(_fn, argument_template, _data_type);
     } else if (_fn.binary_type == TFunctionBinaryType::JAVA_UDF) {
@@ -102,6 +105,22 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
                     assert_cast<const DataTypeAggState*>(_data_type.get())->get_nested_function());
         } else {
             return Status::InternalError("Function {} is not endwith '_state'", _fn.signature);
+        }    
+    } else if (_fn.binary_type == TFunctionBinaryType::PYTHON_UDF) {
+        LOG(INFO) << "zhangmao__fn.binary_type: " << _fn.binary_type;
+        if (config::enable_python_support) {
+            if (_fn.is_udtf_function) {
+                // fake function. it's no use and can't execute.
+                auto builder =
+                        std::make_shared<DefaultFunctionBuilder>(FunctionFake<UDTFImpl>::create());
+                _function = builder->build(argument_template, std::make_shared<DataTypeUInt8>());
+            } else {
+                _function = JavaFunctionCall::create(_fn, argument_template, _data_type);
+            }
+        } else {
+            return Status::InternalError(
+                    "Python UDF is not enabled, you can change be config enable_python_support to true "
+                    "and restart be.");
         }
     } else {
         // get the function. won't prepare function.

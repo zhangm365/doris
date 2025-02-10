@@ -81,12 +81,13 @@ public class ScannerLoader {
     }
 
     public static UdfClassCache getUdfClassLoader(String functionSignature) {
+        LOG.info("getUdfClassLoader zhangmao: " + functionSignature);
         return udfLoadedClasses.get(functionSignature);
     }
 
     public static synchronized void cacheClassLoader(String functionSignature, UdfClassCache classCache,
             long expirationTime) {
-        LOG.info("Cache UDF for: " + functionSignature);
+        LOG.info("Cache UDF for: " + functionSignature + ", classCache: " + classCache);
         udfLoadedClasses.put(functionSignature, classCache, expirationTime * 60 * 1000L);
     }
 

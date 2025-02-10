@@ -99,6 +99,7 @@ public class UdfExecutor extends BaseExecutor {
 
     public long evaluate(Map<String, String> inputParams, Map<String, String> outputParams) throws UdfRuntimeException {
         try {
+            LOG.info("evaluate func, inputParams: " + inputParams + ", outputParams: " + outputParams);
             VectorTable inputTable = VectorTable.createReadableTable(inputParams);
             int numRows = inputTable.getNumRows();
             int numColumns = inputTable.getNumColumns();
@@ -147,10 +148,13 @@ public class UdfExecutor extends BaseExecutor {
             Type funcRetType, Type... parameterTypes)
             throws MalformedURLException, FileNotFoundException, ClassNotFoundException, InternalException,
             UdfRuntimeException {
+        LOG.info("getClassCache for: " + className + ", function signature: " + signature);
         UdfClassCache cache = null;
         if (isStaticLoad) {
             cache = ScannerLoader.getUdfClassLoader(signature);
         }
+        LOG.info("cache: " + cache);
+
         if (cache == null) {
             ClassLoader loader;
             if (Strings.isNullOrEmpty(jarPath)) {
@@ -176,6 +180,8 @@ public class UdfExecutor extends BaseExecutor {
 
     private void checkAndCacheUdfClass(String className, UdfClassCache cache, Type funcRetType, Type... parameterTypes)
             throws InternalException, UdfRuntimeException {
+
+        LOG.info("UdfClassCache: " + cache + ", className: " + className);
         ArrayList<String> signatures = Lists.newArrayList();
         Class<?> c = cache.udfClass;
         Method[] methods = c.getMethods();
@@ -240,11 +246,14 @@ public class UdfExecutor extends BaseExecutor {
 
     // Preallocate the input objects that will be passed to the underlying UDF.
     // These objects are allocated once and reused across calls to evaluate()
+    @SuppressWarnings("checkstyle:Indentation")
     @Override
     protected void init(TJavaUdfExecutorCtorParams request, String jarPath, Type funcRetType,
             Type... parameterTypes) throws UdfRuntimeException {
         String className = request.fn.scalar_fn.symbol;
         try {
+            // add log by zhangm365 2024-11-27
+            LOG.info("TJavaUdfExecutorCtorParams: " + request + ", jarPath: " + jarPath + ", className: " + className);
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Loading UDF '" + className + "' from " + jarPath);
             }
@@ -260,6 +269,7 @@ public class UdfExecutor extends BaseExecutor {
             udf = ctor.newInstance();
             Method prepareMethod = cache.prepareMethod;
             if (prepareMethod != null) {
+                LOG.info("prepareMethod: " + prepareMethod);
                 prepareMethod.invoke(udf);
             }
 
@@ -268,6 +278,10 @@ public class UdfExecutor extends BaseExecutor {
             evaluateIndex = cache.evaluateIndex;
             retType = cache.retType;
             argTypes = cache.argTypes;
+
+            // add log by zhangm365 2024-11-27
+            LOG.info("UdfClassCache: " + cache + ", method: " + method + ", evaluateIndex: " + evaluateIndex);
+            LOG.info("udf: " + udf);
         } catch (MalformedURLException e) {
             throw new UdfRuntimeException("Unable to load jar.", e);
         } catch (SecurityException e) {
