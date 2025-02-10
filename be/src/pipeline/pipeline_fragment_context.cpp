@@ -215,7 +215,6 @@ PipelinePtr PipelineFragmentContext::add_pipeline(PipelinePtr parent, int idx) {
     PipelineId id = _next_pipeline_id++;
     auto pipeline = std::make_shared<Pipeline>(
             id, parent ? std::min(parent->num_tasks(), _num_instances) : _num_instances,
-            std::dynamic_pointer_cast<PipelineFragmentContext>(shared_from_this()),
             parent ? parent->num_tasks() : _num_instances);
     if (idx >= 0) {
         _pipelines.insert(_pipelines.begin() + idx, pipeline);
@@ -252,11 +251,6 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
                 request.__isset.total_instances ? request.total_instances : _num_instances;
 
         auto* fragment_context = this;
-
-        LOG_INFO("PipelineFragmentContext::prepare")
-                .tag("query_id", print_id(_query_id))
-                .tag("fragment_id", _fragment_id)
-                .tag("pthread_id", (uintptr_t)pthread_self());
 
         if (request.query_options.__isset.is_report_success) {
             fragment_context->set_is_report_success(request.query_options.is_report_success);
@@ -302,8 +296,6 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
         if (local_params.__isset.topn_filter_descs) {
             _query_ctx->init_runtime_predicates(local_params.topn_filter_descs);
         }
-
-        _need_local_merge = request.__isset.parallel_instances;
     }
 
     {
@@ -375,29 +367,9 @@ Status PipelineFragmentContext::_build_pipeline_tasks(const doris::TPipelineFrag
         auto fragment_instance_id = local_params.fragment_instance_id;
         _fragment_instance_ids[i] = fragment_instance_id;
 
-        auto filterparams = std::make_unique<RuntimeFilterParamsContext>();
-
-        {
-            filterparams->runtime_filter_wait_infinitely =
-                    _runtime_state->runtime_filter_wait_infinitely();
-            filterparams->runtime_filter_wait_time_ms =
-                    _runtime_state->runtime_filter_wait_time_ms();
-            filterparams->execution_timeout = _runtime_state->execution_timeout();
-
-            filterparams->exec_env = ExecEnv::GetInstance();
-            filterparams->query_id.set_hi(_runtime_state->query_id().hi);
-            filterparams->query_id.set_lo(_runtime_state->query_id().lo);
-
-            filterparams->be_exec_version = _runtime_state->be_exec_version();
-            filterparams->query_ctx = _query_ctx.get();
-        }
-
-        auto runtime_filter_mgr = std::make_unique<RuntimeFilterMgr>(
-                request.query_id, filterparams.get(), _query_ctx->query_mem_tracker);
-
-        filterparams->runtime_filter_mgr = runtime_filter_mgr.get();
-
-        _runtime_filter_states[i] = std::move(filterparams);
+        _runtime_filter_states[i] = RuntimeFilterParamsContext::create(_query_ctx.get());
+        std::unique_ptr<RuntimeFilterMgr> runtime_filter_mgr = std::make_unique<RuntimeFilterMgr>(
+                request.query_id, _runtime_filter_states[i], _query_ctx->query_mem_tracker, false);
         std::map<PipelineId, PipelineTask*> pipeline_id_to_task;
         auto get_local_exchange_state = [&](PipelinePtr pipeline)
                 -> std::map<int, std::pair<std::shared_ptr<LocalExchangeSharedState>,
@@ -429,6 +401,7 @@ Status PipelineFragmentContext::_build_pipeline_tasks(const doris::TPipelineFrag
                         request.fragment_id, request.query_options, _query_ctx->query_globals,
                         _exec_env, _query_ctx.get());
                 auto& task_runtime_state = _task_runtime_states[pip_idx][i];
+                _runtime_filter_states[i]->set_state(task_runtime_state.get());
                 {
                     // Initialize runtime state for this task
                     task_runtime_state->set_query_mem_tracker(_query_ctx->query_mem_tracker);
@@ -460,9 +433,8 @@ Status PipelineFragmentContext::_build_pipeline_tasks(const doris::TPipelineFrag
                     task_runtime_state->set_load_stream_per_node(request.load_stream_per_node);
                     task_runtime_state->set_total_load_streams(request.total_load_streams);
                     task_runtime_state->set_num_local_sink(request.num_local_sink);
-                    DCHECK(_runtime_filter_states[i]->runtime_filter_mgr);
-                    task_runtime_state->set_runtime_filter_mgr(
-                            _runtime_filter_states[i]->runtime_filter_mgr);
+
+                    task_runtime_state->set_runtime_filter_mgr(runtime_filter_mgr.get());
                 }
                 auto cur_task_id = _total_tasks++;
                 task_runtime_state->set_task_id(cur_task_id);
@@ -775,7 +747,7 @@ Status PipelineFragmentContext::_add_local_exchange_impl(
     switch (data_distribution.distribution_type) {
     case ExchangeType::HASH_SHUFFLE:
         shared_state->exchanger = ShuffleExchanger::create_unique(
-                std::max(cur_pipe->num_tasks(), _num_instances),
+                std::max(cur_pipe->num_tasks(), _num_instances), _num_instances,
                 use_global_hash_shuffle ? _total_instances : _num_instances,
                 _runtime_state->query_options().__isset.local_exchange_free_blocks_limit
                         ? cast_set<int>(
@@ -842,7 +814,7 @@ Status PipelineFragmentContext::_add_local_exchange_impl(
     }
     case ExchangeType::ADAPTIVE_PASSTHROUGH:
         shared_state->exchanger = AdaptivePassthroughExchanger::create_unique(
-                cur_pipe->num_tasks(), _num_instances,
+                std::max(cur_pipe->num_tasks(), _num_instances), _num_instances,
                 _runtime_state->query_options().__isset.local_exchange_free_blocks_limit
                         ? cast_set<int>(
                                   _runtime_state->query_options().local_exchange_free_blocks_limit)
@@ -943,9 +915,13 @@ Status PipelineFragmentContext::_add_local_exchange(
             << " cur_pipe->operators().size(): " << cur_pipe->operators().size()
             << " new_pip->operators().size(): " << new_pip->operators().size();
 
-    // Add passthrough local exchanger if necessary
+    // There are some local shuffles with relatively heavy operations on the sink.
+    // If the local sink concurrency is 1 and the local source concurrency is n, the sink becomes a bottleneck.
+    // Therefore, local passthrough is used to increase the concurrency of the sink.
+    // op -> local sink(1) -> local source (n)
+    // op -> local passthrough(1) -> local passthrough(n) ->  local sink(n) -> local source (n)
     if (cur_pipe->num_tasks() > 1 && new_pip->num_tasks() == 1 &&
-        Pipeline::is_hash_exchange(data_distribution.distribution_type)) {
+        Pipeline::heavy_operations_on_the_sink(data_distribution.distribution_type)) {
         RETURN_IF_ERROR(_add_local_exchange_impl(
                 cast_set<int>(new_pip->operators().size()), pool, new_pip,
                 add_pipeline(new_pip, pip_idx + 2), DataDistribution(ExchangeType::PASSTHROUGH),
@@ -975,9 +951,9 @@ Status PipelineFragmentContext::_plan_local_exchange(
         // if 'num_buckets == 0' means the fragment is colocated by exchange node not the
         // scan node. so here use `_num_instance` to replace the `num_buckets` to prevent dividing 0
         // still keep colocate plan after local shuffle
-        RETURN_IF_ERROR(_plan_local_exchange(
-                _use_serial_source || num_buckets == 0 ? _num_instances : num_buckets, pip_idx,
-                _pipelines[pip_idx], bucket_seq_to_instance_idx, shuffle_idx_to_instance_idx));
+        RETURN_IF_ERROR(_plan_local_exchange(num_buckets, pip_idx, _pipelines[pip_idx],
+                                             bucket_seq_to_instance_idx,
+                                             shuffle_idx_to_instance_idx));
     }
     return Status::OK();
 }
@@ -1198,6 +1174,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
     std::stringstream error_msg;
     bool enable_query_cache = request.fragment.__isset.query_cache_param;
 
+    bool fe_with_old_version = false;
     switch (tnode.node_type) {
     case TPlanNodeType::OLAP_SCAN_NODE: {
         op.reset(new OlapScanOperatorX(
@@ -1205,6 +1182,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
                 enable_query_cache ? request.fragment.query_cache_param : TQueryCacheParam {}));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case TPlanNodeType::GROUP_COMMIT_SCAN_NODE: {
@@ -1215,6 +1193,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
         op.reset(new GroupCommitOperatorX(pool, tnode, next_operator_id(), descs, _num_instances));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case doris::TPlanNodeType::JDBC_SCAN_NODE: {
@@ -1227,12 +1206,14 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
                     "Jdbc scan node is disabled, you can change be config enable_java_support "
                     "to true and restart be.");
         }
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case doris::TPlanNodeType::FILE_SCAN_NODE: {
         op.reset(new FileScanOperatorX(pool, tnode, next_operator_id(), descs, _num_instances));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case TPlanNodeType::ES_SCAN_NODE:
@@ -1240,6 +1221,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
         op.reset(new EsScanOperatorX(pool, tnode, next_operator_id(), descs, _num_instances));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case TPlanNodeType::EXCHANGE_NODE: {
@@ -1248,6 +1230,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
         op.reset(new ExchangeSourceOperatorX(pool, tnode, next_operator_id(), descs, num_senders));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case TPlanNodeType::AGGREGATION_NODE: {
@@ -1385,8 +1368,8 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
             const uint32_t partition_count = 32;
             auto inner_probe_operator =
                     std::make_shared<HashJoinProbeOperatorX>(pool, tnode_, 0, descs);
-            auto inner_sink_operator = std::make_shared<HashJoinBuildSinkOperatorX>(
-                    pool, 0, tnode_, descs, _need_local_merge);
+            auto inner_sink_operator =
+                    std::make_shared<HashJoinBuildSinkOperatorX>(pool, 0, tnode_, descs);
 
             RETURN_IF_ERROR(inner_probe_operator->init(tnode_, _runtime_state.get()));
             RETURN_IF_ERROR(inner_sink_operator->init(tnode_, _runtime_state.get()));
@@ -1406,8 +1389,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
             _dag[downstream_pipeline_id].push_back(build_side_pipe->id());
 
             auto sink_operator = std::make_shared<PartitionedHashJoinSinkOperatorX>(
-                    pool, next_sink_operator_id(), tnode_, descs, _need_local_merge,
-                    partition_count);
+                    pool, next_sink_operator_id(), tnode_, descs, partition_count);
             sink_operator->set_inner_operators(inner_sink_operator, inner_probe_operator);
             DataSinkOperatorPtr sink = std::move(sink_operator);
             sink->set_dests_id({op->operator_id()});
@@ -1431,8 +1413,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
             _dag[downstream_pipeline_id].push_back(build_side_pipe->id());
 
             DataSinkOperatorPtr sink;
-            sink.reset(new HashJoinBuildSinkOperatorX(pool, next_sink_operator_id(), tnode, descs,
-                                                      _need_local_merge));
+            sink.reset(new HashJoinBuildSinkOperatorX(pool, next_sink_operator_id(), tnode, descs));
             sink->set_dests_id({op->operator_id()});
             RETURN_IF_ERROR(build_side_pipe->set_sink(sink));
             RETURN_IF_ERROR(build_side_pipe->sink()->init(tnode, _runtime_state.get()));
@@ -1459,8 +1440,8 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
         _dag[downstream_pipeline_id].push_back(build_side_pipe->id());
 
         DataSinkOperatorPtr sink;
-        sink.reset(new NestedLoopJoinBuildSinkOperatorX(pool, next_sink_operator_id(), tnode, descs,
-                                                        _need_local_merge));
+        sink.reset(
+                new NestedLoopJoinBuildSinkOperatorX(pool, next_sink_operator_id(), tnode, descs));
         sink->set_dests_id({op->operator_id()});
         RETURN_IF_ERROR(build_side_pipe->set_sink(sink));
         RETURN_IF_ERROR(build_side_pipe->sink()->init(tnode, _runtime_state.get()));
@@ -1609,6 +1590,7 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
         op.reset(new DataGenSourceOperatorX(pool, tnode, next_operator_id(), descs));
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
+        fe_with_old_version = !tnode.__isset.is_serial_operator;
         break;
     }
     case TPlanNodeType::SCHEMA_SCAN_NODE: {
@@ -1632,6 +1614,10 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
     default:
         return Status::InternalError("Unsupported exec type in pipeline: {}",
                                      print_plan_node_type(tnode.node_type));
+    }
+    if (request.__isset.parallel_instances && fe_with_old_version) {
+        cur_pipe->set_num_tasks(request.parallel_instances);
+        op->set_serial_operator();
     }
 
     return Status::OK();

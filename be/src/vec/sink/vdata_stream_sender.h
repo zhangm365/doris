@@ -53,9 +53,9 @@
 #include "vec/sink/vtablet_finder.h"
 
 namespace doris {
+#include "common/compile_check_begin.h"
 class ObjectPool;
 class RuntimeState;
-class MemTracker;
 class RowDescriptor;
 class TDataSink;
 class TDataStreamSink;
@@ -86,6 +86,7 @@ public:
     void reset_block() { _mutable_block.reset(); }
 
     void set_is_local(bool is_local) { _is_local = is_local; }
+    bool is_local() const { return _is_local; }
 
 private:
     pipeline::ExchangeSinkLocalState* _parent;
@@ -232,3 +233,5 @@ protected:
 
 } // namespace vectorized
 } // namespace doris
+
+#include "common/compile_check_end.h"

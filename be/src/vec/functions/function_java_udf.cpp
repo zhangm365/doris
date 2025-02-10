@@ -45,9 +45,7 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
 
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
-    if (env == nullptr) {
-        return Status::InternalError("Failed to get/create JVM");
-    }
+
     LOG(INFO) << "JNIEnv by zhangm365: " << env;
 
     if (scope == FunctionContext::FunctionStateScope::THREAD_LOCAL) {
@@ -104,7 +102,7 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
 }
 
 Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
-                                      const ColumnNumbers& arguments, size_t result,
+                                      const ColumnNumbers& arguments, uint32_t result,
                                       size_t num_rows) const {
 
     LOG(INFO) << "params by zhangm365. arguments.size(): " << arguments.size() << ", result: " << result << ", num_rows: " << num_rows;
