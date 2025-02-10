@@ -1018,6 +1018,9 @@ DEFINE_Bool(enable_java_support, "true");
 // enable prefetch tablets before opening
 DEFINE_mBool(enable_prefetch_tablet, "true");
 
+// enable python udf
+DEFINE_Bool(enable_python_support, "false");
+
 // Set config randomly to check more issues in github workflow
 DEFINE_Bool(enable_fuzzy_mode, "false");
 

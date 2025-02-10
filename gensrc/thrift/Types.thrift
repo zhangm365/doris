@@ -322,7 +322,9 @@ enum TFunctionBinaryType {
 
   JAVA_UDF,
 
-  AGG_STATE
+  AGG_STATE,
+
+  PYTHON_UDF
 }
 
 // Represents a fully qualified function name.
@@ -392,6 +394,8 @@ struct TFunction {
   14: optional bool is_udtf_function = false
   15: optional bool is_static_load = false
   16: optional i64 expiration_time //minutes
+  17: optional string input_type
+  18: optional string content
 }
 
 enum TJdbcOperation {

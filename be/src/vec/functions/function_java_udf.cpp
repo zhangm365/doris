@@ -40,8 +40,13 @@ JavaFunctionCall::JavaFunctionCall(const TFunction& fn, const DataTypes& argumen
         : fn_(fn), _argument_types(argument_types), _return_type(return_type) {}
 
 Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::FunctionStateScope scope) {
+
+    LOG(INFO) << "params by zhangm365. scope: " << scope;
+
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
+
+    LOG(INFO) << "JNIEnv by zhangm365: " << env;
 
     if (scope == FunctionContext::FunctionStateScope::THREAD_LOCAL) {
         SCOPED_TIMER(context->get_udf_execute_timer());
@@ -54,6 +59,8 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
             std::string local_location;
             auto function_cache = UserFunctionCache::instance();
             TJavaUdfExecutorCtorParams ctor_params;
+            LOG(INFO) << "fn_ by zhangm365: " << fn_;
+
             ctor_params.__set_fn(fn_);
             // get jar path if both file path location and checksum are null
             if (!fn_.hdfs_location.empty() && !fn_.checksum.empty()) {
@@ -79,6 +86,10 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
             jni_ctx->executor = env->NewObject(jni_ctx->executor_cl, jni_ctx->executor_ctor_id,
                                                ctor_params_bytes);
 
+            LOG(INFO) << "ctor_params_bytes by zhangm365: " << ctor_params_bytes;
+
+            LOG(INFO) << "jni_ctx->executor_cl by zhangm365: " << jni_ctx->executor_cl << ", jni_ctx->executor: " << jni_ctx->executor;
+
             jbyte* pBytes = env->GetByteArrayElements(ctor_params_bytes, nullptr);
             env->ReleaseByteArrayElements(ctor_params_bytes, pBytes, JNI_ABORT);
             env->DeleteLocalRef(ctor_params_bytes);
@@ -93,22 +104,36 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
 Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
                                       const ColumnNumbers& arguments, uint32_t result,
                                       size_t num_rows) const {
+
+    LOG(INFO) << "params by zhangm365. arguments.size(): " << arguments.size() << ", result: " << result << ", num_rows: " << num_rows;
+
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
+
+    LOG(INFO) << "JNIEnv by zhangm365: " << env;
+
     JniContext* jni_ctx = reinterpret_cast<JniContext*>(
             context->get_function_state(FunctionContext::THREAD_LOCAL));
     SCOPED_TIMER(context->get_udf_execute_timer());
     std::unique_ptr<long[]> input_table;
     RETURN_IF_ERROR(JniConnector::to_java_table(&block, num_rows, arguments, input_table));
     auto input_table_schema = JniConnector::parse_table_schema(&block, arguments, true);
+
+    LOG(INFO) << "input_table_schema.first by zhangm365: " << input_table_schema.first << ", input_table_schema.second: " << input_table_schema.second;
     std::map<String, String> input_params = {
             {"meta_address", std::to_string((long)input_table.get())},
             {"required_fields", input_table_schema.first},
             {"columns_types", input_table_schema.second}};
     jobject input_map = JniUtil::convert_to_java_map(env, input_params);
     auto output_table_schema = JniConnector::parse_table_schema(&block, {result}, true);
+
+    LOG(INFO) << "output_table_schema.first by zhangm365: " << output_table_schema.first << ", output_table_schema.second: " << output_table_schema.second;
+
     std::string output_nullable =
             block.get_by_position(result).type->is_nullable() ? "true" : "false";
+
+    LOG(INFO) << "output_nullable by zhangm365: " << output_nullable;
+
     std::map<String, String> output_params = {{"is_nullable", output_nullable},
                                               {"required_fields", output_table_schema.first},
                                               {"columns_types", output_table_schema.second}};

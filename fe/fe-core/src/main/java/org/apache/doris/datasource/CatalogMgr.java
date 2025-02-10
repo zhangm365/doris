@@ -239,15 +239,17 @@ public class CatalogMgr implements Writable, GsonPostProcessable {
 
     private void createCatalogImpl(CatalogIf catalog, String catalogName,
             boolean ifNotExists) throws UserException {
-        writeLock();
-        try {
-            if (nameToCatalog.containsKey(catalog.getName())) {
-                if (ifNotExists) {
-                    LOG.warn("Catalog {} is already exist.", catalogName);
-                    return;
-                }
-                throw new DdlException("Catalog had already exist with name: " + catalogName);
+        if (nameToCatalog.containsKey(stmt.getCatalogName())) {
+            if (stmt.isSetIfNotExists()) {
+                LOG.warn("Catalog {} is already exist.", stmt.getCatalogName());
+                throw new DdlException("Catalog had already exist with name: " + stmt.getCatalogName());
             }
+        }
+
+        writeLock();
+
+        try {
+
             createCatalogInternal(catalog, false);
             Env.getCurrentEnv().getEditLog().logCatalogLog(OperationType.OP_CREATE_CATALOG, catalog.constructEditLog());
         } finally {
