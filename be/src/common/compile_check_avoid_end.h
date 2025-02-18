@@ -15,22 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.nereids.properties;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#undef COMPILE_AVOID_CHECK
 
-/**
- * use for Round Robin by data sink.
- */
-public class DistributionSpecTableSinkRandomPartitioned extends DistributionSpec {
-
-    public static final DistributionSpecTableSinkRandomPartitioned INSTANCE =
-            new DistributionSpecTableSinkRandomPartitioned();
-
-    private DistributionSpecTableSinkRandomPartitioned() {
-        super();
-    }
-
-    @Override
-    public boolean satisfy(DistributionSpec other) {
-        return other instanceof DistributionSpecTableSinkRandomPartitioned;
-    }
-}
+// #include "common/compile_check_avoid_end.h"

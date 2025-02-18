@@ -15,25 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#pragma once
+package org.apache.doris.nereids.properties;
 
-#include "common/factory_creator.h"
-#include "runtime/workload_group/workload_group.h"
+/**
+ * use for shuffle data by tablet-id before sink.
+ */
+public class DistributionSpecOlapTableSinkHashPartitioned extends DistributionSpec {
 
-namespace doris {
+    public static final DistributionSpecOlapTableSinkHashPartitioned
+            INSTANCE = new DistributionSpecOlapTableSinkHashPartitioned();
 
-class WorkloadGroupContext {
-    ENABLE_FACTORY_CREATOR(WorkloadGroupContext);
+    private DistributionSpecOlapTableSinkHashPartitioned() {
+        super();
+    }
 
-public:
-    WorkloadGroupContext() = default;
-    virtual ~WorkloadGroupContext() = default;
-
-    WorkloadGroupPtr workload_group() { return _workload_group; }
-    void set_workload_group(WorkloadGroupPtr wg) { _workload_group = wg; }
-
-protected:
-    WorkloadGroupPtr _workload_group = nullptr;
-};
-
-} // namespace doris
+    @Override
+    public boolean satisfy(DistributionSpec other) {
+        return other instanceof DistributionSpecOlapTableSinkHashPartitioned;
+    }
+}
