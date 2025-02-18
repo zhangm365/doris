@@ -188,62 +188,6 @@ public class UdfExecutor extends BaseExecutor {
                 .append(Joiner.on("\n    ").join(signatures));
         throw new UdfRuntimeException(sb.toString());
     }
-
-    // Preallocate the input objects that will be passed to the underlying UDF.
-    // These objects are allocated once and reused across calls to evaluate()
-    @SuppressWarnings("checkstyle:Indentation")
-    @Override
-    protected void init(TJavaUdfExecutorCtorParams request, String jarPath, Type funcRetType,
-            Type... parameterTypes) throws UdfRuntimeException {
-        String className = request.fn.scalar_fn.symbol;
-        try {
-            // add log by zhangm365 2024-11-27
-            LOG.info("TJavaUdfExecutorCtorParams: " + request + ", jarPath: " + jarPath + ", className: " + className);
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Loading UDF '" + className + "' from " + jarPath);
-            }
-            isStaticLoad = request.getFn().isSetIsStaticLoad() && request.getFn().is_static_load;
-            long expirationTime = 360L; // default is 6 hours
-            if (request.getFn().isSetExpirationTime()) {
-                expirationTime = request.getFn().getExpirationTime();
-            }
-            UdfClassCache cache = getClassCache(className, jarPath, request.getFn().getSignature(), expirationTime,
-                    funcRetType, parameterTypes);
-            methodAccess = cache.methodAccess;
-            Constructor<?> ctor = cache.udfClass.getConstructor();
-            udf = ctor.newInstance();
-            Method prepareMethod = cache.prepareMethod;
-            if (prepareMethod != null) {
-                LOG.info("prepareMethod: " + prepareMethod);
-                prepareMethod.invoke(udf);
-            }
-
-            argClass = cache.argClass;
-            method = cache.method;
-            evaluateIndex = cache.evaluateIndex;
-            retType = cache.retType;
-            argTypes = cache.argTypes;
-            retClass = cache.retClass;
-
-            // add log by zhangm365 2024-11-27
-            LOG.info("UdfClassCache: " + cache + ", method: " + method + ", evaluateIndex: " + evaluateIndex);
-            LOG.info("udf: " + udf);
-        } catch (MalformedURLException e) {
-            throw new UdfRuntimeException("Unable to load jar.", e);
-        } catch (SecurityException e) {
-            throw new UdfRuntimeException("Unable to load function.", e);
-        } catch (ClassNotFoundException e) {
-            throw new UdfRuntimeException("Unable to find class.", e);
-        } catch (NoSuchMethodException e) {
-            throw new UdfRuntimeException(
-                    "Unable to find constructor with no arguments.", e);
-        } catch (IllegalArgumentException e) {
-            throw new UdfRuntimeException(
-                    "Unable to call UDF constructor with no arguments.", e);
-        } catch (Exception e) {
-            throw new UdfRuntimeException("Unable to call create UDF instance.", e);
-        }
-    }
 }
 
 

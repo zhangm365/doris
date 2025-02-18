@@ -781,10 +781,6 @@ unsupportedCreateStatement
         functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
         RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
         properties=propertyClause?? inlineFunction?                             #createUserDefineFunction
-    | CREATE (GLOBAL | SESSION | LOCAL)? ALIAS FUNCTION (IF NOT EXISTS)?
-        functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
-        WITH PARAMETER LEFT_PAREN parameters=identifierSeq? RIGHT_PAREN
-        AS expression                                                           #createAliasFunction
     | CREATE USER (IF NOT EXISTS)? grantUserIdentify
         (SUPERUSER | DEFAULT ROLE role=STRING_LITERAL)?
         passwordOption (COMMENT STRING_LITERAL)?                                #createUser
