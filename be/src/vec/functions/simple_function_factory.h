@@ -161,6 +161,8 @@ public:
                                  int be_version = BeExecVersionManager::get_newest_version()) {
         std::string key_str = name;
 
+        LOG(INFO) << "zhangmao key_str: " << key_str;
+
         if (function_alias.contains(name)) {
             key_str = function_alias[name];
         }
@@ -176,6 +178,8 @@ public:
 
         // if function is variadic, added types_str as key
         if (function_variadic_set.count(key_str)) {
+
+            LOG(INFO) << "zhangmao function_variadic_set.count(key_str)";
             for (const auto& arg : arguments) {
                 key_str.append(arg.type->is_nullable()
                                        ? reinterpret_cast<const DataTypeNullable*>(arg.type.get())
@@ -190,6 +194,7 @@ public:
             // use original name as signature without variadic arguments
             iter = function_creators.find(name);
             if (iter == function_creators.end()) {
+                LOG(INFO) << "zhangmao function_variadic_set.count(key_str): ";
                 LOG(WARNING) << fmt::format("Function signature {} is not found", key_str);
                 return nullptr;
             }

@@ -1068,7 +1068,15 @@ DECLARE_Bool(enable_java_support);
 DECLARE_mBool(enable_prefetch_tablet);
 
 // enable python udf
-DECLARE_Bool(enable_python_support);
+DECLARE_Bool(enable_pythonUdf_support);
+// config python evn path
+DECLARE_Strings(python_envs);
+// create time worker timeout
+DECLARE_mInt32(create_child_worker_timeout_ms);
+// report python worker STDERR to client
+DECLARE_Bool(report_python_worker_error);
+DECLARE_Bool(python_worker_reuse);
+DECLARE_Int32(python_worker_expire_time_sec);
 
 // Set config randomly to check more issues in github workflow
 DECLARE_Bool(enable_fuzzy_mode);

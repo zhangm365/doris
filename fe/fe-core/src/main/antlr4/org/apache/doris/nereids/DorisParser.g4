@@ -208,11 +208,7 @@ supportedCreateStatement
     | CREATE SQL_BLOCK_RULE (IF NOT EXISTS)?
         name=identifier properties=propertyClause?                        #createSqlBlockRule
     | CREATE ENCRYPTKEY (IF NOT EXISTS)? multipartIdentifier AS STRING_LITERAL  #createEncryptkey
-    | CREATE statementScope?
-            (TABLES | AGGREGATE)? FUNCTION (IF NOT EXISTS)?
-            functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
-            RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
-            properties=propertyClause?                                              #createUserDefineFunction
+                                              #createUserDefineFunction
     | CREATE statementScope? ALIAS FUNCTION (IF NOT EXISTS)?
             functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
             WITH PARAMETER LEFT_PAREN parameters=identifierSeq? RIGHT_PAREN
@@ -285,7 +281,7 @@ supportedShowStatement
     | SHOW DELETE ((FROM | IN) database=multipartIdentifier)?                       #showDelete
     | SHOW ALL? GRANTS                                                              #showGrants
     | SHOW GRANTS FOR userIdentify                                                  #showGrantsForUser
-    | SHOW SYNC JOB ((FROM | IN) database=multipartIdentifier)?                     #showSyncJob    
+    | SHOW SYNC JOB ((FROM | IN) database=multipartIdentifier)?                     #showSyncJob
     | SHOW LOAD PROFILE loadIdPath=STRING_LITERAL? limitClause?                     #showLoadProfile
     | SHOW CREATE REPOSITORY FOR identifier                                         #showCreateRepository
     | SHOW VIEW
@@ -980,7 +976,7 @@ dataDesc
 statementScope
     : (GLOBAL | SESSION | LOCAL)
     ;
-    
+
 buildMode
     : BUILD (IMMEDIATE | DEFERRED)
     ;

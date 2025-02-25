@@ -67,11 +67,16 @@ Status VExprContext::execute(vectorized::Block* block, int* result_column_id) {
 Status VExprContext::prepare(RuntimeState* state, const RowDescriptor& row_desc) {
     _prepared = true;
     Status st;
+    LOG(INFO) << "zhangmao VExprContext::" << __PRETTY_FUNCTION__ << ", _root = " << typeid(_root).name();
     RETURN_IF_CATCH_EXCEPTION({ st = _root->prepare(state, row_desc, this); });
     return st;
 }
 
 Status VExprContext::open(RuntimeState* state) {
+
+    const auto& root_ref = *_root;
+    LOG(INFO) << "zhangmao VExprContext::" << __PRETTY_FUNCTION__ << ", _root = " << typeid(root_ref).name();
+
     DCHECK(_prepared);
     if (_opened) {
         return Status::OK();
@@ -82,6 +87,7 @@ Status VExprContext::open(RuntimeState* state) {
     FunctionContext::FunctionStateScope scope =
             _is_clone ? FunctionContext::THREAD_LOCAL : FunctionContext::FRAGMENT_LOCAL;
     Status st;
+    // 传入 scope 变量
     RETURN_IF_CATCH_EXCEPTION({ st = _root->open(state, this, scope); });
     return st;
 }

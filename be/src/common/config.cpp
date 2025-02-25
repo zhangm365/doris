@@ -1019,7 +1019,15 @@ DEFINE_Bool(enable_java_support, "true");
 DEFINE_mBool(enable_prefetch_tablet, "true");
 
 // enable python udf
-DEFINE_Bool(enable_python_support, "false");
+DEFINE_Bool(enable_pythonUdf_support, "true");
+// python env
+DEFINE_Strings(python_envs, "");
+// create time worker timeout
+DEFINE_mInt32(create_child_worker_timeout_ms, "1000");
+// report python worker STDERR to client
+DEFINE_Bool(report_python_worker_error, "true");
+DEFINE_Bool(python_worker_reuse, "true");
+DEFINE_Int32(python_worker_expire_time_sec, "300");
 
 // Set config randomly to check more issues in github workflow
 DEFINE_Bool(enable_fuzzy_mode, "false");

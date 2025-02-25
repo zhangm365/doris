@@ -272,7 +272,7 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths,
     RETURN_IF_ERROR(init_pipeline_task_scheduler());
     _workload_group_manager = new WorkloadGroupMgr();
     _scanner_scheduler = new doris::vectorized::ScannerScheduler();
-    _fragment_mgr = new FragmentMgr(this);
+    _fragment_mgr = new FragmentMgr(this);    // exec env owns the FragmentMgr instance.
     _result_cache = new ResultCache(config::query_cache_max_size_mb,
                                     config::query_cache_elasticity_size_mb);
     _cluster_info = new ClusterInfo();
@@ -371,6 +371,8 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths,
     _runtime_query_statistics_mgr->start_report_thread();
     _s_ready = true;
 
+    // RETURN_IF_ERROR(PythonEnvManager::getInstance().init(config::python_envs));
+    // PythonEnvManager::getInstance().start_background_cleanup_thread();
     return Status::OK();
 }
 

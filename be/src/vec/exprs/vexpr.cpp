@@ -186,7 +186,8 @@ VExpr::VExpr(const TExprNode& node)
           _opcode(node.__isset.opcode ? node.opcode : TExprOpcode::INVALID_OPCODE),
           _type(TypeDescriptor::from_thrift(node.type)) {
     if (node.__isset.fn) {
-        _fn = node.fn;
+        LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", node.fn.name.function_name = " << node.fn.name.function_name;
+        _fn = node.fn;    // initialize _fn
     }
 
     bool is_nullable = true;
@@ -212,6 +213,10 @@ VExpr::VExpr(TypeDescriptor type, bool is_slotref, bool is_nullable)
 }
 
 Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprContext* context) {
+
+    LOG(INFO) << "Entering VExpr::prepare, node_type = " << this->type();
+    LOG(INFO) << "zhangmao VExpr::prepare, before: context->_depth_num = " << context->_depth_num;
+    LOG(INFO) << "zhangmao VExpr::prepare, this->_children.size() = " << this->_children.size();
     ++context->_depth_num;
     if (context->_depth_num > config::max_depth_of_expr_tree) {
         return Status::Error<ErrorCode::EXCEEDED_LIMIT>(
@@ -220,8 +225,10 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
     }
 
     for (auto& i : _children) {
+        LOG(INFO) << "zhangmao VExpr::prepare, i = " << i->type();
         RETURN_IF_ERROR(i->prepare(state, row_desc, context));
     }
+    LOG(INFO) << "zhangmao VExpr::prepare, after: context->_depth_num = " << context->_depth_num;
     --context->_depth_num;
     _enable_inverted_index_query = state->query_options().enable_inverted_index_query;
     return Status::OK();
@@ -229,7 +236,10 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
 
 Status VExpr::open(RuntimeState* state, VExprContext* context,
                    FunctionContext::FunctionStateScope scope) {
+
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", this->_children.size() = " << this->_children.size();
     for (auto& i : _children) {
+        LOG(INFO) << "zhangmao VExpr::open" << __PRETTY_FUNCTION__ << ", i.type = " << i->type();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
@@ -246,6 +256,7 @@ void VExpr::close(VExprContext* context, FunctionContext::FunctionStateScope sco
 
 // NOLINTBEGIN(readability-function-size)
 Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", expr_node.node_type = " << expr_node.node_type;
     try {
         switch (expr_node.node_type) {
         case TExprNodeType::BOOL_LITERAL:
@@ -299,6 +310,7 @@ Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {
         case TExprNodeType::NULL_AWARE_BINARY_PRED:
         case TExprNodeType::FUNCTION_CALL:
         case TExprNodeType::COMPUTE_FUNCTION_CALL: {
+            LOG(INFO) << "Entering VectorizedFnCall constructor";
             expr = VectorizedFnCall::create_shared(expr_node);
             break;
         }
@@ -358,6 +370,7 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     // create root expr
     int root_children = nodes[*node_idx].num_children;
     VExprSPtr root;
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", root_children = " << root_children;
     RETURN_IF_ERROR(create_expr(nodes[*node_idx], root));
     DCHECK(root != nullptr);
     root_expr = root;
@@ -371,9 +384,13 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     std::stack<std::pair<VExprSPtr, int>> s;
     s.emplace(root, root_children);
     while (!s.empty()) {
-        auto& parent = s.top();
+        // Copy the pair from the top of the stack to safely access parent's pointer.
+        auto parent = s.top();
+        LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", parent.children = " << parent.second;
+
+        // Update the stack: if more than one child remains, decrement count; otherwise, pop the stack.
         if (parent.second > 1) {
-            parent.second -= 1;
+            s.top().second -= 1;
         } else {
             s.pop();
         }
@@ -384,6 +401,7 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
         VExprSPtr expr;
         RETURN_IF_ERROR(create_expr(nodes[*node_idx], expr));
         DCHECK(expr != nullptr);
+        // Use the local copy of parent's pointer to add the child safely.
         parent.first->add_child(expr);
         int num_children = nodes[*node_idx].num_children;
         if (num_children > 0) {
@@ -400,6 +418,7 @@ Status VExpr::create_expr_tree(const TExpr& texpr, VExprContextSPtr& ctx) {
     }
     int node_idx = 0;
     VExprSPtr e;
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", texpr.nodes.size() = " << texpr.nodes.size();
     Status status = create_tree_from_thrift(texpr.nodes, &node_idx, e, ctx);
     if (status.ok() && node_idx + 1 != texpr.nodes.size()) {
         status = Status::InternalError(
@@ -416,6 +435,7 @@ Status VExpr::create_expr_tree(const TExpr& texpr, VExprContextSPtr& ctx) {
 
 Status VExpr::create_expr_trees(const std::vector<TExpr>& texprs, VExprContextSPtrs& ctxs) {
     ctxs.clear();
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", texprs.size() = " << texprs.size();
     for (const auto& texpr : texprs) {
         VExprContextSPtr ctx;
         RETURN_IF_ERROR(create_expr_tree(texpr, ctx));
@@ -459,6 +479,7 @@ Status VExpr::check_expr_output_type(const VExprContextSPtrs& ctxs,
 
 Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
                       const RowDescriptor& row_desc) {
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", ctxs.size() = " << ctxs.size() << ", row_desc.size() = " << row_desc.debug_string();
     for (auto ctx : ctxs) {
         RETURN_IF_ERROR(ctx->prepare(state, row_desc));
     }
@@ -466,6 +487,7 @@ Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
 }
 
 Status VExpr::open(const VExprContextSPtrs& ctxs, RuntimeState* state) {
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", ctxs.size() = " << ctxs.size();
     for (const auto& ctx : ctxs) {
         RETURN_IF_ERROR(ctx->open(state));
     }
@@ -570,8 +592,13 @@ void VExpr::register_function_context(RuntimeState* state, VExprContext* context
 Status VExpr::init_function_context(RuntimeState* state, VExprContext* context,
                                     FunctionContext::FunctionStateScope scope,
                                     const FunctionBasePtr& function) const {
+
+    LOG(INFO) << "zhangmao VExpr::" << __PRETTY_FUNCTION__ << ", scope = " << scope;
+    LOG(INFO) << "function->is_udf_function() = " << function->is_udf_function();
+
     FunctionContext* fn_ctx = context->fn_context(_fn_context_index);
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
+        LOG(INFO) << "Entering: scope == FunctionContext::FRAGMENT_LOCAL";
         std::vector<std::shared_ptr<ColumnPtrWrapper>> constant_cols;
         for (auto c : _children) {
             std::shared_ptr<ColumnPtrWrapper> const_col;
@@ -588,6 +615,7 @@ Status VExpr::init_function_context(RuntimeState* state, VExprContext* context,
     }
 
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
+        LOG(INFO) << "Entering: scope == FunctionContext::FRAGMENT_LOCAL";
         RETURN_IF_ERROR(function->open(fn_ctx, FunctionContext::FRAGMENT_LOCAL));
     }
     RETURN_IF_ERROR(function->open(fn_ctx, FunctionContext::THREAD_LOCAL));

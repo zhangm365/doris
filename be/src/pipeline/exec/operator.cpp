@@ -161,7 +161,9 @@ std::string OperatorXBase::debug_string(RuntimeState* state, int indentation_lev
 
 Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
     std::string node_name = print_plan_node_type(tnode.node_type);
+    LOG(INFO) << "zhangmao OperatorXBase::" << __PRETTY_FUNCTION__ << ", tnode = " << apache::thrift::ThriftDebugString(tnode);
     _nereids_id = tnode.nereids_id;
+    LOG(INFO) << "tnode.intermediate_output_tuple_id_list.empty() = " << tnode.intermediate_output_tuple_id_list.empty();
     if (!tnode.intermediate_output_tuple_id_list.empty()) {
         if (!tnode.__isset.output_tuple_id) {
             return Status::InternalError("no final output tuple id");
@@ -177,12 +179,13 @@ Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
     }
     auto substr = node_name.substr(0, node_name.find("_NODE"));
     _op_name = substr + "_OPERATOR";
-
-    if (tnode.__isset.vconjunct) {
+    LOG(INFO) << "_op_name = " << _op_name;
+    LOG(INFO) << "tnode.__isset.vconjunct = " << tnode.__isset.vconjunct << ", tnode.__isset.conjuncts = " << tnode.__isset.conjuncts;
+    if (tnode.__isset.vconjunct) {    // vectorized 版构造表达式树
         vectorized::VExprContextSPtr context;
         RETURN_IF_ERROR(vectorized::VExpr::create_expr_tree(tnode.vconjunct, context));
         _conjuncts.emplace_back(context);
-    } else if (tnode.__isset.conjuncts) {
+    } else if (tnode.__isset.conjuncts) {    // 使用传统版，对每个 conjunct 构造表达式树
         for (auto& conjunct : tnode.conjuncts) {
             vectorized::VExprContextSPtr context;
             RETURN_IF_ERROR(vectorized::VExpr::create_expr_tree(conjunct, context));
@@ -191,7 +194,8 @@ Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
     }
 
     // create the projections expr
-
+    LOG(INFO) << "tnode.__isset.projections = " << tnode.__isset.projections;
+    LOG(INFO) << "tnode.intermediate_projections_list.empty() = " << tnode.intermediate_projections_list.empty();
     if (tnode.__isset.projections) {
         DCHECK(tnode.__isset.output_tuple_id);
         RETURN_IF_ERROR(vectorized::VExpr::create_expr_trees(tnode.projections, _projections));
@@ -209,6 +213,8 @@ Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
 }
 
 Status OperatorXBase::open(RuntimeState* state) {
+    LOG(INFO) << "zhangmao OperatorXBase::" << __func__;
+    LOG(INFO) << "_conjuncts.size() = " << _conjuncts.size() << ", _projections.size() = " << _projections.size();
     for (auto& conjunct : _conjuncts) {
         RETURN_IF_ERROR(conjunct->prepare(state, intermediate_row_desc()));
     }

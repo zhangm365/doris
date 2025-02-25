@@ -143,4 +143,6 @@ docker/runtime/be/resource/apache-doris/
 # other
 compile_commands.json
 .github
-
+be/.clion*
+samples/*
+fe/doris-meta/*

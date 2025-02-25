@@ -230,6 +230,7 @@ PipelinePtr PipelineFragmentContext::add_pipeline(PipelinePtr parent, int idx) {
 
 Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& request,
                                         ThreadPool* thread_pool) {
+    LOG(INFO) << "zhangmao PipelineFragmentContext::" << __PRETTY_FUNCTION__;
     if (_prepared) {
         return Status::InternalError("Already prepared");
     }
@@ -310,7 +311,9 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
     {
         SCOPED_TIMER(_build_pipelines_timer);
         // 2. Build pipelines with operators in this fragment.
-        auto root_pipeline = add_pipeline();
+        auto root_pipeline = add_pipeline();    // 创建根 Pipeline 对象
+        LOG(INFO) << "After set up the <RuntimeState> _runtime_state, then call the <_build_pipelines>, the root_pipeline id = " << root_pipeline->id();
+        // 初始化成员变量：操作符 _root_op
         RETURN_IF_ERROR(_build_pipelines(_runtime_state->obj_pool(), request, *_query_ctx->desc_tbl,
                                          &_root_op, root_pipeline));
 
@@ -318,6 +321,8 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
         if (!request.fragment.__isset.output_sink) {
             return Status::InternalError("No output sink in this fragment!");
         }
+        LOG(INFO) << "request.fragment.output_sink.type = " << request.fragment.output_sink.type;
+        LOG(INFO) << "request.fragment.output_exprs.size() = " << request.fragment.output_exprs.size();
         RETURN_IF_ERROR(_create_data_sink(_runtime_state->obj_pool(), request.fragment.output_sink,
                                           request.fragment.output_exprs, request,
                                           root_pipeline->output_row_desc(), _runtime_state.get(),
@@ -339,6 +344,7 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
     }
 
     // 5. Initialize global states in pipelines.
+    LOG(INFO) << "Pipelines: _pipelines.size() = " << _pipelines.size();
     for (PipelinePtr& pipeline : _pipelines) {
         SCOPED_TIMER(_prepare_all_pipelines_timer);
         pipeline->children().clear();
@@ -620,6 +626,7 @@ void PipelineFragmentContext::trigger_report_if_necessary() {
     }
 }
 
+// 根据 request.fragment.plan.nodes 在 pipeline 中创建表达式树: 初始化 root, cur_pipe 变量
 Status PipelineFragmentContext::_build_pipelines(ObjectPool* pool,
                                                  const doris::TPipelineFragmentParams& request,
                                                  const DescriptorTbl& descs, OperatorPtr* root,
@@ -629,7 +636,9 @@ Status PipelineFragmentContext::_build_pipelines(ObjectPool* pool,
     }
 
     int node_idx = 0;
-
+    LOG(INFO) << "zhangmao PipelineFragmentContext::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "request.fragment.plan.nodes.size() = " << request.fragment.plan.nodes.size();
+    LOG(INFO) << "DescriptorTbl descs = " << descs.debug_string();
     RETURN_IF_ERROR(_create_tree_helper(pool, request.fragment.plan.nodes, request, descs, nullptr,
                                         &node_idx, root, cur_pipe, 0, false));
 
@@ -647,6 +656,8 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
                                                     int* node_idx, OperatorPtr* root,
                                                     PipelinePtr& cur_pipe, int child_idx,
                                                     const bool followed_by_shuffled_operator) {
+
+    LOG(INFO) << "zhangmao PipelineFragmentContext::" << __PRETTY_FUNCTION__;
     // propagate error case
     if (*node_idx >= tnodes.size()) {
         return Status::InternalError(
@@ -656,6 +667,7 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
     const TPlanNode& tnode = tnodes[*node_idx];
 
     int num_children = tnodes[*node_idx].num_children;
+    LOG(INFO) << "TPlanNode: tnode.node_type = " << tnode.node_type << ", num_children = " << num_children;
     bool current_followed_by_shuffled_operator = followed_by_shuffled_operator;
     OperatorPtr op = nullptr;
     RETURN_IF_ERROR(_create_operator(pool, tnodes[*node_idx], request, descs, op, cur_pipe,
@@ -663,7 +675,8 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
                                      followed_by_shuffled_operator));
     // Initialization must be done here. For example, group by expressions in agg will be used to
     // decide if a local shuffle should be planed, so it must be initialized here.
-    RETURN_IF_ERROR(op->init(tnode, _runtime_state.get()));
+    LOG(INFO) << "init OperatorPtr <op> = " << op->debug_string() << ", op->type = " << typeid(op.get()).name();
+    RETURN_IF_ERROR(op->init(tnode, _runtime_state.get()));    // 初始化 OperatorPtr op 对象
     // assert(parent != nullptr || (node_idx == 0 && root_expr != nullptr));
     if (parent != nullptr) {
         // add to parent's child(s)
@@ -1017,6 +1030,7 @@ Status PipelineFragmentContext::_create_data_sink(ObjectPool* pool, const TDataS
                                                   const RowDescriptor& row_desc,
                                                   RuntimeState* state, DescriptorTbl& desc_tbl,
                                                   PipelineId cur_pipeline_id) {
+    LOG(INFO) << "zhangmao PipelineFragmentContext::" << __func__ << ", thrift_sink.type = " << thrift_sink.type;
     switch (thrift_sink.type) {
     case TDataSinkType::DATA_STREAM_SINK: {
         if (!thrift_sink.__isset.stream_sink) {
@@ -1190,13 +1204,14 @@ Status PipelineFragmentContext::_create_operator(ObjectPool* pool, const TPlanNo
     _pipeline_parent_map.pop(cur_pipe, parent_idx, child_idx);
     std::stringstream error_msg;
     bool enable_query_cache = request.fragment.__isset.query_cache_param;
-
+    LOG(INFO) << "zhangmao PipelineFragmentContext::" << __PRETTY_FUNCTION__ << ", tnode.node_type = " << tnode.node_type;
     bool fe_with_old_version = false;
+    // 根据节点类型初始化 OperatorPtr op 参数：构造函数
     switch (tnode.node_type) {
     case TPlanNodeType::OLAP_SCAN_NODE: {
-        op.reset(new OlapScanOperatorX(
+        op = std::make_shared<OlapScanOperatorX>(
                 pool, tnode, next_operator_id(), descs, _num_instances,
-                enable_query_cache ? request.fragment.query_cache_param : TQueryCacheParam {}));
+                enable_query_cache ? request.fragment.query_cache_param : TQueryCacheParam {});
         RETURN_IF_ERROR(cur_pipe->add_operator(
                 op, request.__isset.parallel_instances ? request.parallel_instances : 0));
         fe_with_old_version = !tnode.__isset.is_serial_operator;

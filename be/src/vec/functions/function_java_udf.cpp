@@ -41,12 +41,12 @@ JavaFunctionCall::JavaFunctionCall(const TFunction& fn, const DataTypes& argumen
 
 Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::FunctionStateScope scope) {
 
-    LOG(INFO) << "params by zhangm365. scope: " << scope;
+    LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__ << ", with scope: " << scope << ", function: " << fn_.name;
 
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
 
-    LOG(INFO) << "JNIEnv by zhangm365: " << env;
+    LOG(INFO) << "Get JNIEnv for Java UDF execution: " << env;
 
     if (scope == FunctionContext::FunctionStateScope::THREAD_LOCAL) {
         SCOPED_TIMER(context->get_udf_execute_timer());
@@ -57,9 +57,9 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
         JniLocalFrame jni_frame;
         {
             std::string local_location;
-            auto function_cache = UserFunctionCache::instance();
+            auto* function_cache = UserFunctionCache::instance();
             TJavaUdfExecutorCtorParams ctor_params;
-            LOG(INFO) << "fn_ by zhangm365: " << fn_;
+            LOG(INFO) << "zhangmao function info: " << fn_;
 
             ctor_params.__set_fn(fn_);
             // get jar path if both file path location and checksum are null
@@ -86,9 +86,42 @@ Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::Functio
             jni_ctx->executor = env->NewObject(jni_ctx->executor_cl, jni_ctx->executor_ctor_id,
                                                ctor_params_bytes);
 
-            LOG(INFO) << "ctor_params_bytes by zhangm365: " << ctor_params_bytes;
+			// 获取 jbyteArray 的长度
+			jsize len = env->GetArrayLength(ctor_params_bytes);
+            LOG(INFO) << "Length of serialized constructor parameters (ctor_params_bytes): " << len;
 
-            LOG(INFO) << "jni_ctx->executor_cl by zhangm365: " << jni_ctx->executor_cl << ", jni_ctx->executor: " << jni_ctx->executor;
+			// 分配一个缓冲区读取数据
+			std::vector<jbyte> buffer(len);
+			env->GetByteArrayRegion(ctor_params_bytes, 0, len, buffer.data());
+
+			// 格式化输出数据为十六进制字符串
+			std::ostringstream oss;
+			oss << "ctor_params_bytes content: ";
+			for (jsize i = 0; i < len; ++i) {
+			oss << std::hex << std::setw(2) << std::setfill('0')
+					<< static_cast<int>(static_cast<unsigned char>(buffer[i])) << " ";
+			}
+			LOG(INFO) << oss.str();
+
+            // For executor_cl (a jclass)
+			jmethodID toStringMethod = env->GetMethodID(jni_ctx->executor_cl, "toString", "()Ljava/lang/String;");
+			if (toStringMethod != nullptr) {
+				auto* strObj = (jstring)env->CallObjectMethod(jni_ctx->executor_cl, toStringMethod);
+				const char* cStr = env->GetStringUTFChars(strObj, nullptr);
+				LOG(INFO) << "jni_ctx->executor_cl toString: " << cStr;
+				env->ReleaseStringUTFChars(strObj, cStr);
+				env->DeleteLocalRef(strObj);
+			}
+
+            // For executor (a Java object)
+            toStringMethod = env->GetMethodID(env->GetObjectClass(jni_ctx->executor), "toString", "()Ljava/lang/String;");
+            if (toStringMethod != nullptr) {
+                auto* strObj = (jstring)env->CallObjectMethod(jni_ctx->executor, toStringMethod);
+                const char* cStr = env->GetStringUTFChars(strObj, nullptr);
+                LOG(INFO) << "jni_ctx->executor toString: " << cStr;
+                env->ReleaseStringUTFChars(strObj, cStr);
+                env->DeleteLocalRef(strObj);
+            }
 
             jbyte* pBytes = env->GetByteArrayElements(ctor_params_bytes, nullptr);
             env->ReleaseByteArrayElements(ctor_params_bytes, pBytes, JNI_ABORT);
@@ -105,21 +138,22 @@ Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
                                       const ColumnNumbers& arguments, uint32_t result,
                                       size_t num_rows) const {
 
-    LOG(INFO) << "params by zhangm365. arguments.size(): " << arguments.size() << ", result: " << result << ", num_rows: " << num_rows;
+    LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao params by = arguments.size() = " << arguments.size() << ", result = " << result << ", num_rows = " << num_rows;
 
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
 
-    LOG(INFO) << "JNIEnv by zhangm365: " << env;
+    LOG(INFO) << "JNIEnv by zhangmao: " << env;
 
-    JniContext* jni_ctx = reinterpret_cast<JniContext*>(
+    auto* jni_ctx = reinterpret_cast<JniContext*>(
             context->get_function_state(FunctionContext::THREAD_LOCAL));
     SCOPED_TIMER(context->get_udf_execute_timer());
     std::unique_ptr<long[]> input_table;
     RETURN_IF_ERROR(JniConnector::to_java_table(&block, num_rows, arguments, input_table));
     auto input_table_schema = JniConnector::parse_table_schema(&block, arguments, true);
 
-    LOG(INFO) << "input_table_schema.first by zhangm365: " << input_table_schema.first << ", input_table_schema.second: " << input_table_schema.second;
+    LOG(INFO) << "input_table_schema.first by zhangmao: " << input_table_schema.first << ", input_table_schema.second: " << input_table_schema.second;
     std::map<String, String> input_params = {
             {"meta_address", std::to_string((long)input_table.get())},
             {"required_fields", input_table_schema.first},
@@ -127,12 +161,12 @@ Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
     jobject input_map = JniUtil::convert_to_java_map(env, input_params);
     auto output_table_schema = JniConnector::parse_table_schema(&block, {result}, true);
 
-    LOG(INFO) << "output_table_schema.first by zhangm365: " << output_table_schema.first << ", output_table_schema.second: " << output_table_schema.second;
+    LOG(INFO) << "output_table_schema.first by zhangmao: " << output_table_schema.first << ", output_table_schema.second: " << output_table_schema.second;
 
     std::string output_nullable =
             block.get_by_position(result).type->is_nullable() ? "true" : "false";
 
-    LOG(INFO) << "output_nullable by zhangm365: " << output_nullable;
+    LOG(INFO) << "output_nullable by zhangmao: " << output_nullable;
 
     std::map<String, String> output_params = {{"is_nullable", output_nullable},
                                               {"required_fields", output_table_schema.first},
@@ -149,7 +183,7 @@ Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
 
 Status JavaFunctionCall::close(FunctionContext* context,
                                FunctionContext::FunctionStateScope scope) {
-    JniContext* jni_ctx = reinterpret_cast<JniContext*>(
+    auto* jni_ctx = reinterpret_cast<JniContext*>(
             context->get_function_state(FunctionContext::THREAD_LOCAL));
     // JNIContext own some resource and its release method depend on JavaFunctionCall
     // has to release the resource before JavaFunctionCall is deconstructed.

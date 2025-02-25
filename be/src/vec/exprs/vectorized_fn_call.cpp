@@ -39,6 +39,7 @@
 #include "vec/functions/function_rpc.h"
 #include "vec/functions/simple_function_factory.h"
 #include "vec/utils/util.hpp"
+#include "vec/functions/function_python_udf.h"
 
 namespace doris {
 class RowDescriptor;
@@ -53,8 +54,11 @@ const std::string AGG_STATE_SUFFIX = "_state";
 
 VectorizedFnCall::VectorizedFnCall(const TExprNode& node) : VExpr(node) {}
 
+// prepare 阶段：根据函数类型初始化 IFunctionBase _function 成员变量。
 Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
                                  VExprContext* context) {
+
+    LOG(INFO) << "zhangmao VectorizedFnCall::" << __PRETTY_FUNCTION__ << ", this->_children.size() = " << _children.size();
     RETURN_IF_ERROR_OR_PREPARED(VExpr::prepare(state, desc, context));
     ColumnsWithTypeAndName argument_template;
     argument_template.reserve(_children.size());
@@ -64,8 +68,8 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
 
     _expr_name = fmt::format("VectorizedFnCall[{}](arguments={},return={})", _fn.name.function_name,
                              get_child_names(), _data_type->get_name());
-    
-    LOG(INFO) << "zhangmao_expr_name: " << _expr_name;
+
+    LOG(INFO) << "zhangmao _expr_name: " << _expr_name;
 
     if (_fn.binary_type == TFunctionBinaryType::RPC) {
         _function = FunctionRPC::create(_fn, argument_template, _data_type);
@@ -104,21 +108,16 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
                     assert_cast<const DataTypeAggState*>(_data_type.get())->get_nested_function());
         } else {
             return Status::InternalError("Function {} is not endwith '_state'", _fn.signature);
-        }    
+        }
     } else if (_fn.binary_type == TFunctionBinaryType::PYTHON_UDF) {
-        LOG(INFO) << "zhangmao__fn.binary_type: " << _fn.binary_type;
-        if (config::enable_python_support) {
-            if (_fn.is_udtf_function) {
-                // fake function. it's no use and can't execute.
-                auto builder =
-                        std::make_shared<DefaultFunctionBuilder>(FunctionFake<UDTFImpl>::create());
-                _function = builder->build(argument_template, std::make_shared<DataTypeUInt8>());
-            } else {
-                _function = JavaFunctionCall::create(_fn, argument_template, _data_type);
-            }
+        LOG(INFO) << "zhangmao _fn.binary_type: " << _fn.binary_type;
+        if (config::enable_pythonUdf_support) {
+
+            _function = PythonFunctionCall::create(_fn, argument_template, _data_type);
+
         } else {
             return Status::InternalError(
-                    "Python UDF is not enabled, you can change be config enable_python_support to true "
+                    "Python UDF is not enabled, you can change be config enable_pythonUdf_support to true "
                     "and restart be.");
         }
     } else {
@@ -132,6 +131,8 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
                                      _fn.name.function_name, get_child_names(),
                                      _data_type->get_name());
     }
+
+    // 注册函数的上下文环境
     VExpr::register_function_context(state, context);
     _function_name = _fn.name.function_name;
     _prepare_finished = true;
@@ -141,9 +142,13 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
 Status VectorizedFnCall::open(RuntimeState* state, VExprContext* context,
                               FunctionContext::FunctionStateScope scope) {
     DCHECK(_prepare_finished);
+    LOG(INFO) << "zhangmao VectorizedFnCall::" << __PRETTY_FUNCTION__ << ", scope = " << scope;
+    LOG(INFO) << "this->_children.size() = " << _children.size();
     for (auto& i : _children) {
+        LOG(INFO) << "i->type = " << typeid(i).name();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
+    // 根据已创建的 IFunctionBase _function，初始化函数上下文。
     RETURN_IF_ERROR(VExpr::init_function_context(state, context, scope, _function));
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
         RETURN_IF_ERROR(VExpr::get_const_col(context, nullptr));
@@ -165,6 +170,8 @@ Status VectorizedFnCall::evaluate_inverted_index(VExprContext* context, uint32_t
 Status VectorizedFnCall::_do_execute(doris::vectorized::VExprContext* context,
                                      doris::vectorized::Block* block, int* result_column_id,
                                      ColumnNumbers& args) {
+
+    LOG(INFO) << "zhangmao VectorizedFnCall::" << __func__;
     if (is_const_and_have_executed()) { // const have executed in open function
         return get_result_from_const(block, _expr_name, result_column_id);
     }
@@ -203,6 +210,7 @@ Status VectorizedFnCall::_do_execute(doris::vectorized::VExprContext* context,
     uint32_t num_columns_without_result = block->columns();
     // prepare a column to save result
     block->insert({nullptr, _data_type, _expr_name});
+    // execute function:
     RETURN_IF_ERROR(_function->execute(context->fn_context(_fn_context_index), *block, args,
                                        num_columns_without_result, block->rows(), false));
     *result_column_id = num_columns_without_result;
@@ -217,6 +225,7 @@ Status VectorizedFnCall::execute_runtime_fitler(doris::vectorized::VExprContext*
 
 Status VectorizedFnCall::execute(VExprContext* context, vectorized::Block* block,
                                  int* result_column_id) {
+    LOG(INFO)  << "zhangmao VectorizedFnCall::" << __func__;
     ColumnNumbers arguments;
     return _do_execute(context, block, result_column_id, arguments);
 }

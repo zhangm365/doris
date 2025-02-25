@@ -239,7 +239,7 @@ Status JniConnector::fill_block(Block* block, const ColumnNumbers& arguments, lo
         return Status::InternalError("table_address is 0");
     }
 
-    LOG(INFO) << "params by zhangm365. arguments.size(): " << arguments.size() << ", table_address: " << table_address;
+    LOG(INFO) << "zhangmao JniConnector::" << __PRETTY_FUNCTION__ << ", arguments.size(): " << arguments.size() << ", table_address: " << table_address;
 
     TableMetaAddress table_meta(table_address);
     long num_rows = table_meta.next_meta_as_long();
@@ -256,7 +256,7 @@ Status JniConnector::fill_block(Block* block, const ColumnNumbers& arguments, lo
             }
             auto res_col = return_type->create_column();
 
-            LOG(INFO) << "return_type->get_name() by zhangm365: " << return_type->get_name() << ", result_nullable: " << result_nullable;
+            LOG(INFO) << "return_type->get_name() by zhangmao: " << return_type->get_name() << ", result_nullable: " << result_nullable;
             if (result_nullable) {
                 block->replace_by_position(
                         i, ColumnNullable::create(std::move(res_col), std::move(null_col)));
@@ -303,7 +303,7 @@ Status JniConnector::_fill_column(TableMetaAddress& address, ColumnPtr& doris_co
     }
     MutableColumnPtr data_column;
 
-    LOG(INFO) << "doris_column->is_nullable() by zhangm365: " << doris_column->is_nullable();
+    LOG(INFO) << "doris_column->is_nullable() by zhangmao: " << doris_column->is_nullable();
     if (doris_column->is_nullable()) {
         auto* nullable_column =
                 reinterpret_cast<vectorized::ColumnNullable*>(doris_column->assume_mutable().get());

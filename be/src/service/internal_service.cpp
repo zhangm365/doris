@@ -299,6 +299,7 @@ void PInternalService::exec_plan_fragment(google::protobuf::RpcController* contr
                                           const PExecPlanFragmentRequest* request,
                                           PExecPlanFragmentResult* response,
                                           google::protobuf::Closure* done) {
+    LOG(INFO) << "zhangmao PInternalService::" << __PRETTY_FUNCTION__;
     timeval tv {};
     gettimeofday(&tv, nullptr);
     response->set_received_time(tv.tv_sec * 1000LL + tv.tv_usec / 1000);
@@ -323,6 +324,8 @@ void PInternalService::_exec_plan_fragment_in_pthread(google::protobuf::RpcContr
     bool compact = request->has_compact() ? request->compact() : false;
     PFragmentRequestVersion version =
             request->has_version() ? request->version() : PFragmentRequestVersion::VERSION_1;
+    LOG(INFO) << "zhangmao PInternalService::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "version = " << version << ", compact = " << compact;
     try {
         st = _exec_plan_fragment_impl(request->request(), version, compact);
     } catch (const Exception& e) {
@@ -561,15 +564,17 @@ Status PInternalService::_exec_plan_fragment_impl(
         }
 
         return Status::OK();
-    } else if (version == PFragmentRequestVersion::VERSION_3) {
-        TPipelineFragmentParamsList t_request;
+    } else if (version == PFragmentRequestVersion::VERSION_3) {    // VERSION_3 is TPipelineFragmentParamsList.
+        LOG(INFO) << "PFragmentRequestVersion == VERSION_3";
+        TPipelineFragmentParamsList t_request;    // It is initialized by the deserialize thrift msg ser_request.
         {
-            const uint8_t* buf = (const uint8_t*)ser_request.data();
+            const auto* buf = (const uint8_t*)ser_request.data();
             uint32_t len = ser_request.size();
             RETURN_IF_ERROR(deserialize_thrift_msg(buf, &len, compact, &t_request));
         }
 
         const auto& fragment_list = t_request.params_list;
+        LOG(INFO) << "fragment_list size: " << fragment_list.size() << ", (cb == nullptr) is " << std::boolalpha << (cb == nullptr);
         if (fragment_list.empty()) {
             return Status::InternalError("Invalid TPipelineFragmentParamsList!");
         }

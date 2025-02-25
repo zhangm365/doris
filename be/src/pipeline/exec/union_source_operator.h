@@ -71,11 +71,14 @@ public:
     bool is_source() const override { return true; }
 
     Status init(const TPlanNode& tnode, RuntimeState* state) override {
+
+        LOG(INFO) << "zhangmao final class UnionSourceOperatorX::" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao tnode = " << tnode.node_type;
         RETURN_IF_ERROR(Base::init(tnode, state));
         DCHECK(tnode.__isset.union_node);
         // Create const_expr_ctx_lists_ from thrift exprs.
-        auto& const_texpr_lists = tnode.union_node.const_expr_lists;
-        for (auto& texprs : const_texpr_lists) {
+        const auto& const_texpr_lists = tnode.union_node.const_expr_lists;
+        for (const auto& texprs : const_texpr_lists) {
             vectorized::VExprContextSPtrs ctxs;
             RETURN_IF_ERROR(vectorized::VExpr::create_expr_trees(texprs, ctxs));
             _const_expr_lists.push_back(ctxs);
@@ -84,13 +87,17 @@ public:
     }
 
     Status open(RuntimeState* state) override {
+        LOG(INFO) << "zhangmao UnionSourceOperatorX::" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao _const_expr_lists.size() = " << _const_expr_lists.size();
         static_cast<void>(Base::open(state));
         // Prepare const expr lists.
         for (const vectorized::VExprContextSPtrs& exprs : _const_expr_lists) {
+            LOG(INFO) << "zhangmao vectorized::VExpr::prepare";
             RETURN_IF_ERROR(vectorized::VExpr::prepare(exprs, state, _row_descriptor));
         }
         // open const expr lists.
         for (const auto& exprs : _const_expr_lists) {
+            LOG(INFO) << "zhangmao vectorized::VExpr::open";
             RETURN_IF_ERROR(vectorized::VExpr::open(exprs, state));
         }
         return Status::OK();

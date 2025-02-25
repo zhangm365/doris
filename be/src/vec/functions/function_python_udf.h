@@ -18,7 +18,7 @@
 #pragma once
 
 #include <gen_cpp/Types_types.h>
-#include <jni.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -30,7 +30,6 @@
 #include "common/logging.h"
 #include "common/status.h"
 #include "udf/udf.h"
-#include "util/jni-util.h"
 #include "vec/core/block.h"
 #include "vec/core/column_numbers.h"
 #include "vec/core/column_with_type_and_name.h"
@@ -41,13 +40,13 @@
 
 namespace doris::vectorized {
 
-class JavaUdfPreparedFunction : public PreparedFunctionImpl {
+class PythonUdfPreparedFunction : public PreparedFunctionImpl {
 public:
     using execute_call_back = std::function<Status(FunctionContext* context, Block& block,
                                                    const ColumnNumbers& arguments, uint32_t result,
                                                    size_t input_rows_count)>;
 
-    explicit JavaUdfPreparedFunction(const execute_call_back& func, const std::string& name)
+    explicit PythonUdfPreparedFunction(const execute_call_back& func, const std::string& name)
             : callback_function(func), name(name) {}
 
     String get_name() const override { return name; }
@@ -66,20 +65,18 @@ private:
     std::string name;
 };
 
-class JavaFunctionCall : public IFunctionBase {
+class PythonFunctionCall : public IFunctionBase {
 public:
-    JavaFunctionCall(const TFunction& fn, const DataTypes& argument_types,
+    PythonFunctionCall(const TFunction& fn, const DataTypes& argument_types,
                      const DataTypePtr& return_type);
 
-    // 创建 JavaFunctionCall 实例：由 VectorizedFnCall::prepare 调用。
     static FunctionBasePtr create(const TFunction& fn, const ColumnsWithTypeAndName& argument_types,
                                   const DataTypePtr& return_type) {
-        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
         DataTypes data_types(argument_types.size());
         for (size_t i = 0; i < argument_types.size(); ++i) {
             data_types[i] = argument_types[i].type;
         }
-        return std::make_shared<JavaFunctionCall>(fn, data_types, return_type);
+        return std::make_shared<PythonFunctionCall>(fn, data_types, return_type);
     }
 
     /// Get the main function name.
@@ -90,12 +87,9 @@ public:
 
     PreparedFunctionPtr prepare(FunctionContext* context, const Block& sample_block,
                                 const ColumnNumbers& arguments, uint32_t result) const override {
-
-        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
-        LOG(INFO) << "Type of this: " << typeid(*this).name();
-        return std::make_shared<JavaUdfPreparedFunction>(
+        return std::make_shared<PythonUdfPreparedFunction>(
                 [this](auto&& PH1, auto&& PH2, auto&& PH3, auto&& PH4, auto&& PH5) {
-                    return JavaFunctionCall::execute_impl(
+                    return PythonFunctionCall::execute_impl(
                             std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2),
                             std::forward<decltype(PH3)>(PH3), std::forward<decltype(PH4)>(PH4),
                             std::forward<decltype(PH5)>(PH5));
@@ -119,43 +113,6 @@ private:
     const DataTypes _argument_types;
     const DataTypePtr _return_type;
 
-    struct JniContext {
-        // Do not save parent directly, because parent is in VExpr, but jni context is in FunctionContext
-        // The deconstruct sequence is not determined, it will core.
-        // JniContext's lifecycle should same with function context, not related with expr
-        jclass executor_cl;
-        jmethodID executor_ctor_id;
-        jmethodID executor_evaluate_id;
-        jmethodID executor_close_id;
-        jobject executor = nullptr;
-        bool is_closed = false;
-        bool open_successes = false;
-
-        JniContext() = default;
-
-        Status close() {
-            if (!open_successes) {
-                LOG_WARNING("maybe open failed, need check the reason");
-                return Status::OK(); //maybe open failed, so can't call some jni
-            }
-            if (is_closed) {
-                return Status::OK();
-            }
-            VLOG_DEBUG << "Free resources for JniContext";
-            JNIEnv* env = nullptr;
-            Status status = JniUtil::GetJNIEnv(&env);
-            if (!status.ok() || env == nullptr) {
-                LOG(WARNING) << "errors while get jni env " << status;
-                return status;
-            }
-            env->CallNonvirtualVoidMethodA(executor, executor_cl, executor_close_id, nullptr);
-            env->DeleteGlobalRef(executor);
-            env->DeleteGlobalRef(executor_cl);
-            RETURN_IF_ERROR(JniUtil::GetJniExceptionMsg(env));
-            is_closed = true;
-            return Status::OK();
-        }
-    };
 };
 
 } // namespace doris::vectorized

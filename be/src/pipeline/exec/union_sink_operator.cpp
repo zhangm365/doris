@@ -63,6 +63,7 @@ UnionSinkOperatorX::UnionSinkOperatorX(int child_id, int sink_id, int dest_id, O
           _child_size(tnode.num_children) {}
 
 Status UnionSinkOperatorX::init(const TPlanNode& tnode, RuntimeState* state) {
+    LOG(INFO) << "zhangmao UnionSinkOperatorX::" << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR(DataSinkOperatorX::init(tnode, state));
     DCHECK(tnode.__isset.union_node);
     {
@@ -77,6 +78,9 @@ Status UnionSinkOperatorX::init(const TPlanNode& tnode, RuntimeState* state) {
 }
 
 Status UnionSinkOperatorX::open(RuntimeState* state) {
+
+    LOG(INFO) << "zhangmao UnionSinkOperatorX::" << __PRETTY_FUNCTION__;
+
     RETURN_IF_ERROR(DataSinkOperatorX<UnionSinkLocalState>::open(state));
     RETURN_IF_ERROR(vectorized::VExpr::prepare(_child_expr, state, _child->row_desc()));
     RETURN_IF_ERROR(vectorized::VExpr::check_expr_output_type(_child_expr, _row_descriptor));
@@ -90,6 +94,7 @@ Status UnionSinkOperatorX::open(RuntimeState* state) {
 }
 
 Status UnionSinkOperatorX::sink(RuntimeState* state, vectorized::Block* in_block, bool eos) {
+    LOG(INFO) << "zhangmao UnionSinkOperatorX::" << __PRETTY_FUNCTION__;
     auto& local_state = get_local_state(state);
     SCOPED_TIMER(local_state.exec_time_counter());
     COUNTER_UPDATE(local_state.rows_input_counter(), (int64_t)in_block->rows());

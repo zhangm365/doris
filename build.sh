@@ -893,6 +893,11 @@ EOF
     mkdir -p "${DORIS_OUTPUT}/be/plugins/connectors/"
     mkdir -p "${DORIS_OUTPUT}/be/plugins/hadoop_conf/"
     mkdir -p "${DORIS_OUTPUT}/be/plugins/java_extensions/"
+    
+    # python udf
+    mkdir -p ${DORIS_OUTPUT}/be/lib/py-packages
+    cp -r -p ${DORIS_HOME}/be/extension/python-udf/src/flight_server.py ${DORIS_OUTPUT}/be/lib/py-packages
+
 fi
 
 if [[ "${BUILD_BROKER}" -eq 1 ]]; then
