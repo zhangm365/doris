@@ -299,7 +299,7 @@ void PInternalService::exec_plan_fragment(google::protobuf::RpcController* contr
                                           const PExecPlanFragmentRequest* request,
                                           PExecPlanFragmentResult* response,
                                           google::protobuf::Closure* done) {
-    LOG(INFO) << "zhangmao PInternalService::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     timeval tv {};
     gettimeofday(&tv, nullptr);
     response->set_received_time(tv.tv_sec * 1000LL + tv.tv_usec / 1000);
@@ -324,7 +324,7 @@ void PInternalService::_exec_plan_fragment_in_pthread(google::protobuf::RpcContr
     bool compact = request->has_compact() ? request->compact() : false;
     PFragmentRequestVersion version =
             request->has_version() ? request->version() : PFragmentRequestVersion::VERSION_1;
-    LOG(INFO) << "zhangmao PInternalService::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "version = " << version << ", compact = " << compact;
     try {
         st = _exec_plan_fragment_impl(request->request(), version, compact);
@@ -512,6 +512,7 @@ void PInternalService::tablet_writer_cancel(google::protobuf::RpcController* con
 Status PInternalService::_exec_plan_fragment_impl(
         const std::string& ser_request, PFragmentRequestVersion version, bool compact,
         const std::function<void(RuntimeState*, Status*)>& cb) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     // Sometimes the BE do not receive the first heartbeat message and it receives request from FE
     // If BE execute this fragment, it will core when it wants to get some property from master info.
     if (ExecEnv::GetInstance()->cluster_info() == nullptr) {

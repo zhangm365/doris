@@ -74,6 +74,7 @@ bool Pipeline::need_to_local_exchange(const DataDistribution target_data_distrib
 }
 
 Status Pipeline::add_operator(OperatorPtr& op, const int parallelism) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     if (parallelism > 0 && op->is_serial_operator()) {
         set_num_tasks(parallelism);
     }

@@ -617,7 +617,7 @@ Status FragmentMgr::exec_plan_fragment(const TExecPlanFragmentParams& params,
 
 Status FragmentMgr::exec_plan_fragment(const TPipelineFragmentParams& params,
                                        const QuerySource query_source) {
-    LOG(INFO) << "zhangmao FragmentMgr::" << __PRETTY_FUNCTION__ << ", params: " << apache::thrift::ThriftDebugString(params);
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", params: " << apache::thrift::ThriftDebugString(params);
     LOG(INFO) << "params.txn_conf.need_txn = " << params.txn_conf.need_txn;
     if (params.txn_conf.need_txn) {
         std::shared_ptr<StreamLoadContext> stream_load_ctx =
@@ -836,7 +836,7 @@ Status FragmentMgr::exec_plan_fragment(const TPipelineFragmentParams& params,
     VLOG_ROW << "query: " << print_id(params.query_id) << "query options is "
              << apache::thrift::ThriftDebugString(params.query_options).c_str();
 
-    LOG(INFO) << "zhangmao FragmentMgr::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     // QueryContext is initialized in _get_or_create_query_ctx.
     std::shared_ptr<QueryContext> query_ctx;
     RETURN_IF_ERROR(
