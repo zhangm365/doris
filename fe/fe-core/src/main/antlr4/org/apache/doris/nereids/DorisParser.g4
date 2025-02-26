@@ -208,7 +208,11 @@ supportedCreateStatement
     | CREATE SQL_BLOCK_RULE (IF NOT EXISTS)?
         name=identifier properties=propertyClause?                        #createSqlBlockRule
     | CREATE ENCRYPTKEY (IF NOT EXISTS)? multipartIdentifier AS STRING_LITERAL  #createEncryptkey
-                                              #createUserDefineFunction
+    | CREATE statementScope?
+            (TABLES | AGGREGATE)? FUNCTION (IF NOT EXISTS)?
+            functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
+            RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
+            properties=propertyClause?                                              #createUserDefineFunction
     | CREATE statementScope? ALIAS FUNCTION (IF NOT EXISTS)?
             functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
             WITH PARAMETER LEFT_PAREN parameters=identifierSeq? RIGHT_PAREN
@@ -772,11 +776,11 @@ analyzeProperties
 unsupportedCreateStatement
     : CREATE (DATABASE | SCHEMA) (IF NOT EXISTS)? name=multipartIdentifier
         properties=propertyClause?                                              #createDatabase
-    | CREATE (GLOBAL | SESSION | LOCAL)?
+    | CREATE statementScope?
         (TABLES | AGGREGATE)? FUNCTION (IF NOT EXISTS)?
         functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
         RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
-        properties=propertyClause?? inlineFunction?                             #createUserDefineFunction
+        properties=propertyClause?? inlineFunction?                             #createUserDefineInlineFunction
     | CREATE USER (IF NOT EXISTS)? grantUserIdentify
         (SUPERUSER | DEFAULT ROLE role=STRING_LITERAL)?
         passwordOption (COMMENT STRING_LITERAL)?                                #createUser
