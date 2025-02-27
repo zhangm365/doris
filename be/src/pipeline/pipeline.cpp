@@ -87,10 +87,14 @@ Status Pipeline::add_operator(OperatorPtr& op, const int parallelism) {
 }
 
 Status Pipeline::prepare(RuntimeState* state) {
-    LOG(INFO) << "zhangmao Pipeline::" << __PRETTY_FUNCTION__ << ", RuntimeState: state =" << typeid(state).name();
-    LOG(INFO) << "_operators.size() = " << _operators.size() << ", _operators.back() 'type = " << typeid(_operators.back()).name();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", RuntimeState* state =" << typeid(state).name();
+    LOG(INFO) << "_operators.size() = " << _operators.size() << ", _operators.back()'type = " << typeid(_operators.back()).name();
     LOG(INFO) << "_operators.back() info: " << _operators.back()->debug_string();
     RETURN_IF_ERROR(_operators.back()->open(state));    // 从最后一个 operator 开始
+
+    auto& sinkRef = *_sink;          // 正确解引用智能指针
+    LOG(INFO) << "_sink type: " << typeid(sinkRef).name(); // 正确触发多态
+
     RETURN_IF_ERROR(_sink->open(state));
     _name.append(std::to_string(id()));
     _name.push_back('-');
@@ -101,6 +105,7 @@ Status Pipeline::prepare(RuntimeState* state) {
     _name.push_back('-');
     _name.append(std::to_string(_sink->node_id()));
     _name.append(_sink->get_name());
+    LOG(INFO) << "_name = " << _name;
     return Status::OK();
 }
 

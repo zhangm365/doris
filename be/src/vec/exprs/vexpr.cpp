@@ -237,7 +237,8 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
 Status VExpr::open(RuntimeState* state, VExprContext* context,
                    FunctionContext::FunctionStateScope scope) {
 
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", this->_children.size() = " << this->_children.size();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "scope = " << scope << ", this->_children.size() = " << this->_children.size();
     for (auto& i : _children) {
         LOG(INFO) << "zhangmao, i = " << i << ", i.type = " << i->type();
         RETURN_IF_ERROR(i->open(state, context, scope));
@@ -479,7 +480,8 @@ Status VExpr::check_expr_output_type(const VExprContextSPtrs& ctxs,
 
 Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
                       const RowDescriptor& row_desc) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", ctxs.size() = " << ctxs.size() << ", row_desc.size() = " << row_desc.debug_string();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "ctxs.size() = " << ctxs.size() << ", row_desc.size() = " << row_desc.debug_string();
     for (auto ctx : ctxs) {
         RETURN_IF_ERROR(ctx->prepare(state, row_desc));
     }
@@ -487,7 +489,8 @@ Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
 }
 
 Status VExpr::open(const VExprContextSPtrs& ctxs, RuntimeState* state) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", ctxs.size() = " << ctxs.size();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "ctxs.size() = " << ctxs.size();
     for (const auto& ctx : ctxs) {
         RETURN_IF_ERROR(ctx->open(state));
     }

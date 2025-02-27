@@ -213,7 +213,7 @@ Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
 }
 
 Status OperatorXBase::open(RuntimeState* state) {
-    LOG(INFO) << "zhangmao OperatorXBase::" << __func__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "_conjuncts.size() = " << _conjuncts.size() << ", _projections.size() = " << _projections.size();
     for (auto& conjunct : _conjuncts) {
         RETURN_IF_ERROR(conjunct->prepare(state, intermediate_row_desc()));
@@ -235,6 +235,12 @@ Status OperatorXBase::open(RuntimeState* state) {
     RETURN_IF_ERROR(vectorized::VExpr::open(_projections, state));
     for (auto& projections : _intermediate_projections) {
         RETURN_IF_ERROR(vectorized::VExpr::open(projections, state));
+    }
+    if (_child) {
+        auto& childRef = *_child;
+        LOG(INFO) << "_child type: " << typeid(childRef).name();
+    } else {
+        LOG(INFO) << "_child == nullptr";
     }
     if (_child && !is_source()) {
         RETURN_IF_ERROR(_child->open(state));

@@ -63,7 +63,7 @@ UnionSinkOperatorX::UnionSinkOperatorX(int child_id, int sink_id, int dest_id, O
           _child_size(tnode.num_children) {}
 
 Status UnionSinkOperatorX::init(const TPlanNode& tnode, RuntimeState* state) {
-    LOG(INFO) << "zhangmao UnionSinkOperatorX::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR(DataSinkOperatorX::init(tnode, state));
     DCHECK(tnode.__isset.union_node);
     {

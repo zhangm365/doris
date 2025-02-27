@@ -323,11 +323,13 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
         }
         LOG(INFO) << "request.fragment.output_sink.type = " << request.fragment.output_sink.type;
         LOG(INFO) << "request.fragment.output_exprs.size() = " << request.fragment.output_exprs.size();
+        // 初始化成员变量 DataSinkOperatorPtr _sink：构造函数创建对象
         RETURN_IF_ERROR(_create_data_sink(_runtime_state->obj_pool(), request.fragment.output_sink,
                                           request.fragment.output_exprs, request,
                                           root_pipeline->output_row_desc(), _runtime_state.get(),
                                           *_desc_tbl, root_pipeline->id()));
-        RETURN_IF_ERROR(_sink->init(request.fragment.output_sink));
+        RETURN_IF_ERROR(_sink->init(request.fragment.output_sink));    // 设置操作符名称
+        // Pipeline 设置 DataSinkOperatorPtr _sink 成员变量
         RETURN_IF_ERROR(root_pipeline->set_sink(_sink));
 
         for (PipelinePtr& pipeline : _pipelines) {

@@ -70,25 +70,27 @@ Status ResultSinkLocalState::init(RuntimeState* state, LocalSinkStateInfo& info)
 }
 
 Status ResultSinkLocalState::open(RuntimeState* state) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     SCOPED_TIMER(exec_time_counter());
     SCOPED_TIMER(_open_timer);
     RETURN_IF_ERROR(Base::open(state));
     auto& p = _parent->cast<ResultSinkOperatorX>();
+    LOG(INFO) << "p._sink_type = " << p._sink_type;
     // create writer based on sink type
     switch (p._sink_type) {
     case TResultSinkType::MYSQL_PROTOCAL: {
         if (state->mysql_row_binary_format()) {
-            _writer.reset(new (std::nothrow) vectorized::VMysqlResultWriter<true>(
-                    _sender.get(), _output_vexpr_ctxs, _profile));
+            _writer = std::make_shared<vectorized::VMysqlResultWriter<true>>(
+                    _sender.get(), _output_vexpr_ctxs, _profile);
         } else {
-            _writer.reset(new (std::nothrow) vectorized::VMysqlResultWriter<false>(
-                    _sender.get(), _output_vexpr_ctxs, _profile));
+            _writer = std::make_shared<vectorized::VMysqlResultWriter<false>>(
+                    _sender.get(), _output_vexpr_ctxs, _profile);
         }
         break;
     }
     case TResultSinkType::ARROW_FLIGHT_PROTOCAL: {
-        _writer.reset(new (std::nothrow) vectorized::VArrowFlightResultWriter(
-                _sender.get(), _output_vexpr_ctxs, _profile));
+        _writer = std::make_shared<vectorized::VArrowFlightResultWriter>(
+                _sender.get(), _output_vexpr_ctxs, _profile);
         break;
     }
     default:
@@ -118,6 +120,7 @@ ResultSinkOperatorX::ResultSinkOperatorX(int operator_id, const RowDescriptor& r
 }
 
 Status ResultSinkOperatorX::open(RuntimeState* state) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR(DataSinkOperatorX<ResultSinkLocalState>::open(state));
     // prepare output_expr
     // From the thrift expressions create the real exprs.

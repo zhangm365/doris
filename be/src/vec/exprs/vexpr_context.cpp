@@ -67,16 +67,18 @@ Status VExprContext::execute(vectorized::Block* block, int* result_column_id) {
 Status VExprContext::prepare(RuntimeState* state, const RowDescriptor& row_desc) {
     _prepared = true;
     Status st;
-    LOG(INFO) << "zhangmao VExprContext::" << __PRETTY_FUNCTION__ << ", _root = " << typeid(_root).name();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    const auto& root_ref = *_root;
+    LOG(INFO) << "_root = " << typeid(root_ref).name();
     RETURN_IF_CATCH_EXCEPTION({ st = _root->prepare(state, row_desc, this); });
     return st;
 }
 
 Status VExprContext::open(RuntimeState* state) {
 
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     const auto& root_ref = *_root;
-    LOG(INFO) << "zhangmao VExprContext::" << __PRETTY_FUNCTION__ << ", _root = " << typeid(root_ref).name();
-
+    LOG(INFO) << "_root = " << typeid(root_ref).name();
     DCHECK(_prepared);
     if (_opened) {
         return Status::OK();
