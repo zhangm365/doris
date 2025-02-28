@@ -38,6 +38,7 @@ namespace doris::pipeline {
 #include "common/compile_check_begin.h"
 
 Status ResultSinkLocalState::init(RuntimeState* state, LocalSinkStateInfo& info) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR(Base::init(state, info));
     SCOPED_TIMER(exec_time_counter());
     SCOPED_TIMER(_init_timer);
@@ -46,7 +47,8 @@ Status ResultSinkLocalState::init(RuntimeState* state, LocalSinkStateInfo& info)
     static const std::string timer_name = "WaitForDependencyTime";
     _wait_for_dependency_timer = ADD_TIMER_WITH_LEVEL(_profile, timer_name, 1);
     auto fragment_instance_id = state->fragment_instance_id();
-
+    const auto& parent_ref = *_parent;
+    LOG(INFO) << "_parent's type = " << typeid(parent_ref).name();
     auto& p = _parent->cast<ResultSinkOperatorX>();
     if (state->query_options().enable_parallel_result_sink) {
         _sender = _parent->cast<ResultSinkOperatorX>()._sender;
@@ -96,7 +98,8 @@ Status ResultSinkLocalState::open(RuntimeState* state) {
     default:
         return Status::InternalError("Unknown result sink type");
     }
-
+    const auto& writer_ref = *_writer;
+    LOG(INFO) << "writer_ref = " << typeid(writer_ref).name();
     RETURN_IF_ERROR(_writer->init(state));
     return Status::OK();
 }

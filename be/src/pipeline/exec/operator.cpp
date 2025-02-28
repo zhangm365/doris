@@ -414,6 +414,7 @@ Status DataSinkOperatorXBase::init(const TPlanNode& tnode, RuntimeState* state) 
 template <typename LocalStateType>
 Status DataSinkOperatorX<LocalStateType>::setup_local_state(RuntimeState* state,
                                                             LocalSinkStateInfo& info) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     auto local_state = LocalStateType::create_unique(this, state);
     RETURN_IF_ERROR(local_state->init(state, info));
     state->emplace_sink_local_state(operator_id(), std::move(local_state));
@@ -440,6 +441,7 @@ std::shared_ptr<BasicSharedState> DataSinkOperatorX<LocalStateType>::create_shar
 
 template <typename LocalStateType>
 Status OperatorX<LocalStateType>::setup_local_state(RuntimeState* state, LocalStateInfo& info) {
+    LOG(INFO) << "zhangmao" << __PRETTY_FUNCTION__;
     auto local_state = LocalStateType::create_unique(state, this);
     RETURN_IF_ERROR(local_state->init(state, info));
     state->emplace_local_state(operator_id(), std::move(local_state));
@@ -631,6 +633,7 @@ Status AsyncWriterSink<Writer, Parent>::init(RuntimeState* state, LocalSinkState
 template <typename Writer, typename Parent>
     requires(std::is_base_of_v<vectorized::AsyncResultWriter, Writer>)
 Status AsyncWriterSink<Writer, Parent>::open(RuntimeState* state) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR(Base::open(state));
     _output_vexpr_ctxs.resize(_parent->cast<Parent>()._output_vexpr_ctxs.size());
     for (size_t i = 0; i < _output_vexpr_ctxs.size(); i++) {

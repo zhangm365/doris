@@ -575,7 +575,7 @@ Status PInternalService::_exec_plan_fragment_impl(
         }
 
         const auto& fragment_list = t_request.params_list;
-        LOG(INFO) << "fragment_list size: " << fragment_list.size() << ", (cb == nullptr) is " << std::boolalpha << (cb == nullptr);
+        LOG(INFO) << "fragment_list.size: " << fragment_list.size() << ", (cb == nullptr) is " << std::boolalpha << (cb == nullptr);
         if (fragment_list.empty()) {
             return Status::InternalError("Invalid TPipelineFragmentParamsList!");
         }

@@ -553,6 +553,7 @@ bool VExpr::is_constant() const {
 
 Status VExpr::get_const_col(VExprContext* context,
                             std::shared_ptr<ColumnPtrWrapper>* column_wrapper) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     if (!is_constant()) {
         return Status::OK();
     }

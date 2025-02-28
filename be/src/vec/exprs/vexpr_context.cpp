@@ -76,7 +76,7 @@ Status VExprContext::prepare(RuntimeState* state, const RowDescriptor& row_desc)
 
 Status VExprContext::open(RuntimeState* state) {
 
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", _is_clone = " << _is_clone;
     const auto& root_ref = *_root;
     LOG(INFO) << "_root = " << typeid(root_ref).name();
     DCHECK(_prepared);
@@ -105,6 +105,7 @@ void VExprContext::close() {
 }
 
 Status VExprContext::clone(RuntimeState* state, VExprContextSPtr& new_ctx) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     DCHECK(_prepared) << "expr context not prepared";
     DCHECK(_opened);
     DCHECK(new_ctx.get() == nullptr);

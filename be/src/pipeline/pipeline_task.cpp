@@ -76,7 +76,10 @@ PipelineTask::PipelineTask(
 
 Status PipelineTask::prepare(const std::vector<TScanRangeParams>& scan_range, const int sender_id,
                              const TDataSink& tsink, QueryContext* query_ctx) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     DCHECK(_sink);
+    const auto& sink_ref = *_sink;
+    LOG(INFO) << "_sink'type = " << typeid(sink_ref).name();
     _init_profile();
     SCOPED_TIMER(_task_profile->total_time_counter());
     SCOPED_CPU_TIMER(_task_cpu_timer);
@@ -95,9 +98,10 @@ Status PipelineTask::prepare(const std::vector<TScanRangeParams>& scan_range, co
 
     _scan_ranges = scan_range;
     auto* parent_profile = _state->get_sink_local_state()->profile();
-
+    LOG(INFO) << "_operators.size() = " << _operators.size();
     for (int op_idx = _operators.size() - 1; op_idx >= 0; op_idx--) {
         auto& op = _operators[op_idx];
+        LOG(INFO) << "op = " << typeid(op).name();
         LocalStateInfo info {parent_profile, _scan_ranges, get_op_shared_state(op->operator_id()),
                              _le_state_map, _task_idx};
         RETURN_IF_ERROR(op->setup_local_state(_state, info));
