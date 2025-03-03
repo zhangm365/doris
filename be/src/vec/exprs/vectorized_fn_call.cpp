@@ -142,7 +142,7 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
 Status VectorizedFnCall::open(RuntimeState* state, VExprContext* context,
                               FunctionContext::FunctionStateScope scope) {
     DCHECK(_prepare_finished);
-    LOG(INFO) << "zhangmao VectorizedFnCall::" << __PRETTY_FUNCTION__ << ", scope = " << scope;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", scope = " << scope;
     LOG(INFO) << "this->_children.size() = " << _children.size();
     for (auto& i : _children) {
         LOG(INFO) << "i->type = " << typeid(i).name();

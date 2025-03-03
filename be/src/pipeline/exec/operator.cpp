@@ -416,6 +416,8 @@ Status DataSinkOperatorX<LocalStateType>::setup_local_state(RuntimeState* state,
                                                             LocalSinkStateInfo& info) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     auto local_state = LocalStateType::create_unique(this, state);
+    const auto& local_state_ref = *local_state;
+    LOG(INFO) << "local_state_ref type: " << typeid(local_state_ref).name();
     RETURN_IF_ERROR(local_state->init(state, info));
     state->emplace_sink_local_state(operator_id(), std::move(local_state));
     return Status::OK();
@@ -441,8 +443,10 @@ std::shared_ptr<BasicSharedState> DataSinkOperatorX<LocalStateType>::create_shar
 
 template <typename LocalStateType>
 Status OperatorX<LocalStateType>::setup_local_state(RuntimeState* state, LocalStateInfo& info) {
-    LOG(INFO) << "zhangmao" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     auto local_state = LocalStateType::create_unique(state, this);
+    const auto& local_state_ref = *local_state;
+    LOG(INFO) << "local_state_ref type: " << typeid(local_state_ref).name();
     RETURN_IF_ERROR(local_state->init(state, info));
     state->emplace_local_state(operator_id(), std::move(local_state));
     return Status::OK();

@@ -124,7 +124,7 @@ ResultSinkOperatorX::ResultSinkOperatorX(int operator_id, const RowDescriptor& r
 
 Status ResultSinkOperatorX::open(RuntimeState* state) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
-    RETURN_IF_ERROR(DataSinkOperatorX<ResultSinkLocalState>::open(state));
+    RETURN_IF_ERROR(DataSinkOperatorX<ResultSinkLocalState>::open(state));    // 调用基类的成员函数
     // prepare output_expr
     // From the thrift expressions create the real exprs.
     RETURN_IF_ERROR(vectorized::VExpr::create_expr_trees(_t_output_expr, _output_vexpr_ctxs));

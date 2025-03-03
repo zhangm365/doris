@@ -370,6 +370,7 @@ Status PipelineFragmentContext::_build_pipeline_tasks(const doris::TPipelineFrag
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     _total_tasks = 0;
     const auto target_size = request.local_params.size();
+    LOG(INFO) << "target_size = " << target_size;
     _tasks.resize(target_size);
     _runtime_filter_states.resize(target_size);
     _runtime_filter_mgr_map.resize(target_size);

@@ -191,6 +191,7 @@ void PipelineTask::_fresh_profile_counter() {
 }
 
 Status PipelineTask::_open() {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     SCOPED_TIMER(_task_profile->total_time_counter());
     SCOPED_CPU_TIMER(_task_cpu_timer);
     SCOPED_TIMER(_open_timer);
@@ -274,6 +275,7 @@ bool PipelineTask::_is_blocked() {
 }
 
 Status PipelineTask::execute(bool* eos) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     if (_eos) {
         *eos = true;
         return Status::OK();

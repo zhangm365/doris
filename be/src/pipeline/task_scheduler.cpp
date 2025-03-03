@@ -50,6 +50,7 @@ TaskScheduler::~TaskScheduler() {
 }
 
 Status TaskScheduler::start() {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     int cores = _task_queue.cores();
     RETURN_IF_ERROR(ThreadPoolBuilder(_name)
                             .set_min_threads(cores)
@@ -97,6 +98,8 @@ void _close_task(PipelineTask* task, Status exec_status) {
 }
 
 void TaskScheduler::_do_work(int index) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "TaskScheduler " << _name << " start";
     while (_markers[index]) {
         auto* task = _task_queue.take(index);
         if (!task) {

@@ -437,7 +437,7 @@ Status VExpr::create_expr_tree(const TExpr& texpr, VExprContextSPtr& ctx) {
 Status VExpr::create_expr_trees(const std::vector<TExpr>& texprs, VExprContextSPtrs& ctxs) {
     ctxs.clear();
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", texprs.size() = " << texprs.size();
-    for (const auto& texpr : texprs) {
+    for (const auto& texpr : texprs) {    // 根据每个 texpr 创建一个 VExprContextSPtr
         VExprContextSPtr ctx;
         RETURN_IF_ERROR(create_expr_tree(texpr, ctx));
         ctxs.push_back(ctx);
