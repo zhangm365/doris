@@ -38,6 +38,7 @@ class VLiteral : public VExpr {
 public:
     VLiteral(const TExprNode& node, bool should_init = true)
             : VExpr(node), _expr_name(_data_type->get_name()) {
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
         if (should_init) {
             init(node);
         }

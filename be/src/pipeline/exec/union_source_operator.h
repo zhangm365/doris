@@ -72,12 +72,13 @@ public:
 
     Status init(const TPlanNode& tnode, RuntimeState* state) override {
 
-        LOG(INFO) << "zhangmao final class UnionSourceOperatorX::" << __PRETTY_FUNCTION__;
-        LOG(INFO) << "zhangmao tnode = " << tnode.node_type;
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+        LOG(INFO) << "tnode = " << tnode.node_type;
         RETURN_IF_ERROR(Base::init(tnode, state));
         DCHECK(tnode.__isset.union_node);
         // Create const_expr_ctx_lists_ from thrift exprs.
         const auto& const_texpr_lists = tnode.union_node.const_expr_lists;
+        LOG(INFO) << "const_texpr_lists.size() = " << const_texpr_lists.size();
         for (const auto& texprs : const_texpr_lists) {
             vectorized::VExprContextSPtrs ctxs;
             RETURN_IF_ERROR(vectorized::VExpr::create_expr_trees(texprs, ctxs));

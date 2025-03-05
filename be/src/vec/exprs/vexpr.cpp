@@ -256,7 +256,7 @@ void VExpr::close(VExprContext* context, FunctionContext::FunctionStateScope sco
 }
 
 // NOLINTBEGIN(readability-function-size)
-Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {
+Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {    // 根据表达式节点类型创建表达式对象。
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", expr_node.node_type = " << expr_node.node_type;
     try {
         switch (expr_node.node_type) {
@@ -375,7 +375,7 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     RETURN_IF_ERROR(create_expr(nodes[*node_idx], root));
     DCHECK(root != nullptr);
     root_expr = root;
-    ctx = std::make_shared<VExprContext>(root);
+    ctx = std::make_shared<VExprContext>(root_expr);
     // short path for leaf node
     if (root_children <= 0) {
         return Status::OK();
@@ -384,10 +384,10 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     // non-recursive traversal
     std::stack<std::pair<VExprSPtr, int>> s;
     s.emplace(root, root_children);
-    while (!s.empty()) {
+    while (!s.empty()) {    // 处理孩子节点
         // Copy the pair from the top of the stack to safely access parent's pointer.
         auto parent = s.top();
-        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", parent.children = " << parent.second;
+        LOG(INFO) << "parent.children = " << parent.second;
 
         // Update the stack: if more than one child remains, decrement count; otherwise, pop the stack.
         if (parent.second > 1) {
@@ -405,6 +405,7 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
         // Use the local copy of parent's pointer to add the child safely.
         parent.first->add_child(expr);
         int num_children = nodes[*node_idx].num_children;
+        LOG(INFO) << "num_children = " << num_children;
         if (num_children > 0) {
             s.emplace(expr, num_children);
         }
