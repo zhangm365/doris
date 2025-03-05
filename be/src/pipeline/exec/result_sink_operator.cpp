@@ -82,16 +82,16 @@ Status ResultSinkLocalState::open(RuntimeState* state) {
     case TResultSinkType::MYSQL_PROTOCAL: {
         if (state->mysql_row_binary_format()) {
             _writer = std::make_shared<vectorized::VMysqlResultWriter<true>>(
-                    _sender.get(), _output_vexpr_ctxs, _profile);
+                    _sender, _output_vexpr_ctxs, _profile);
         } else {
             _writer = std::make_shared<vectorized::VMysqlResultWriter<false>>(
-                    _sender.get(), _output_vexpr_ctxs, _profile);
+                    _sender, _output_vexpr_ctxs, _profile);
         }
         break;
     }
     case TResultSinkType::ARROW_FLIGHT_PROTOCAL: {
         _writer = std::make_shared<vectorized::VArrowFlightResultWriter>(
-                _sender.get(), _output_vexpr_ctxs, _profile);
+                _sender, _output_vexpr_ctxs, _profile);
         break;
     }
     default:

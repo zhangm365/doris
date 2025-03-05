@@ -18,7 +18,7 @@
 # under the License.
 
 # check DORIS_HOME
-export DORIS_HOME=/home/root/zfrFiles/JointLab/doris
+#export DORIS_HOME=/home/root/zfrFiles/JointLab/doris
 
 export LC_ALL=C
 
