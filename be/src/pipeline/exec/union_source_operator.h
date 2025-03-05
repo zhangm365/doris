@@ -87,10 +87,10 @@ public:
         return Status::OK();
     }
 
-    Status open(RuntimeState* state) override {
+    Status prepare(RuntimeState* state) override {
         LOG(INFO) << "zhangmao UnionSourceOperatorX::" << __PRETTY_FUNCTION__;
         LOG(INFO) << "zhangmao _const_expr_lists.size() = " << _const_expr_lists.size();
-        static_cast<void>(Base::open(state));
+        static_cast<void>(Base::prepare(state));
         // Prepare const expr lists.
         for (const vectorized::VExprContextSPtrs& exprs : _const_expr_lists) {
             LOG(INFO) << "zhangmao vectorized::VExpr::prepare";
@@ -106,6 +106,13 @@ public:
     [[nodiscard]] int get_child_count() const { return _child_size; }
     bool require_shuffled_data_distribution() const override {
         return _followed_by_shuffled_operator;
+    }
+
+    void set_low_memory_mode(RuntimeState* state) override {
+        auto& local_state = get_local_state(state);
+        if (local_state._shared_state) {
+            local_state._shared_state->data_queue.set_low_memory_mode();
+        }
     }
 
     bool is_shuffled_operator() const override { return _followed_by_shuffled_operator; }

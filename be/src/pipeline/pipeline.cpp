@@ -92,12 +92,12 @@ Status Pipeline::prepare(RuntimeState* state) {
     const auto& op = *(_operators.back());
     LOG(INFO) << ", _operators.back()'type = " << typeid(op).name();
     LOG(INFO) << "_operators.back() info: " << _operators.back()->debug_string();
-    RETURN_IF_ERROR(_operators.back()->open(state));    // 从最后一个 operator 开始
+    RETURN_IF_ERROR(_operators.back()->prepare(state));    // 从最后一个 operator 开始
 
     auto& sinkRef = *_sink;          // 正确解引用智能指针
     LOG(INFO) << "_sink type: " << typeid(sinkRef).name(); // 正确触发多态
 
-    RETURN_IF_ERROR(_sink->open(state));
+    RETURN_IF_ERROR(_sink->prepare(state));
     _name.append(std::to_string(id()));
     _name.push_back('-');
     for (auto& op : _operators) {
@@ -125,8 +125,9 @@ Status Pipeline::set_sink(DataSinkOperatorPtr& sink) {
 void Pipeline::make_all_runnable() {
     DBUG_EXECUTE_IF("Pipeline::make_all_runnable.sleep", {
         auto pipeline_id = DebugPoints::instance()->get_debug_param_or_default<int32_t>(
-                "Pipeline::make_all_runnable", "pipeline_id", 0);
+                "Pipeline::make_all_runnable.sleep", "pipeline_id", -1);
         if (pipeline_id == id()) {
+            LOG(WARNING) << "Pipeline::make_all_runnable.sleep sleep 10s";
             sleep(10);
         }
     });
