@@ -105,7 +105,7 @@ bool close_task(PipelineTask* task, Status exec_status) {
 void TaskScheduler::_do_work(int index) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "TaskScheduler " << _name << " start";
-    while (_markers[index]) {
+    while (!_need_to_stop) {
         auto* task = _task_queue.take(index);
         if (!task) {
             continue;

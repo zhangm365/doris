@@ -1150,7 +1150,7 @@ Status PipelineFragmentContext::_create_data_sink(ObjectPool* pool, const TDataS
         }
 
         _sink = std::make_shared<MultiCastDataStreamSinkOperatorX>(sink_id, sources, pool,
-                                                                   thrift_sink.multi_cast_stream_sink, row_desc);
+                                                                   thrift_sink.multi_cast_stream_sink);
         for (int i = 0; i < sender_size; ++i) {
             auto new_pipeline = add_pipeline();
             // use to exchange sink
