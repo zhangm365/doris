@@ -88,17 +88,17 @@ public:
     }
 
     Status prepare(RuntimeState* state) override {
-        LOG(INFO) << "zhangmao UnionSourceOperatorX::" << __PRETTY_FUNCTION__;
-        LOG(INFO) << "zhangmao _const_expr_lists.size() = " << _const_expr_lists.size();
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+        LOG(INFO) << "_const_expr_lists.size() = " << _const_expr_lists.size();
         static_cast<void>(Base::prepare(state));
         // Prepare const expr lists.
         for (const vectorized::VExprContextSPtrs& exprs : _const_expr_lists) {
-            LOG(INFO) << "zhangmao vectorized::VExpr::prepare";
+            LOG(INFO) << "vectorized::VExpr::prepare";
             RETURN_IF_ERROR(vectorized::VExpr::prepare(exprs, state, _row_descriptor));
         }
         // open const expr lists.
         for (const auto& exprs : _const_expr_lists) {
-            LOG(INFO) << "zhangmao vectorized::VExpr::open";
+            LOG(INFO) << "vectorized::VExpr::open";
             RETURN_IF_ERROR(vectorized::VExpr::open(exprs, state));
         }
         return Status::OK();

@@ -296,7 +296,8 @@ bool PipelineTask::_is_blocked() {
 }
 
 Status PipelineTask::execute(bool* eos) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;\
+    const auto query_id = _state->query_id();
     if (_eos) {
         *eos = true;
         return Status::OK();
@@ -402,7 +403,7 @@ Status PipelineTask::execute(bool* eos) {
                 *eos = true;
                 [[fallthrough]];
             case State::PENDING: {
-                LOG(INFO) << "Query: " << print_id(query_context()->query_id()) << " has pending block, size: "
+                LOG(INFO) << "Query: " << print_id(query_id) << " has pending block, size: "
                           << PrettyPrinter::print_bytes(_block->allocated_bytes());
                 _exec_state = State::NORMAL;
                 break;
@@ -433,7 +434,7 @@ Status PipelineTask::execute(bool* eos) {
                                 "{}, root revocable mem size: {}, sink revocable mem size: {}, "
                                 "failed: "
                                 "{}",
-                                print_id(query_context()->query_id()), PrettyPrinter::print_bytes(reserve_size),
+                                print_id(query_id), PrettyPrinter::print_bytes(reserve_size),
                                 _root->get_name(), _root->node_id(), _state->task_id(),
                                 PrettyPrinter::print_bytes(_root->revocable_mem_size(_state)),
                                 PrettyPrinter::print_bytes(sink_revokable_mem_size),
@@ -449,7 +450,7 @@ Status PipelineTask::execute(bool* eos) {
                             LOG(INFO) << fmt::format(
                                     "Query: {} sink: {}, node id: {}, task id: "
                                     "{}, revocable mem size: {}",
-                                    print_id(query_context()->query_id()), _sink->get_name(), _sink->node_id(),
+                                    print_id(query_id), _sink->get_name(), _sink->node_id(),
                                     _state->task_id(),
                                     PrettyPrinter::print_bytes(sink_revokable_mem_size));
                             ExecEnv::GetInstance()->workload_group_mgr()->add_paused_query(
@@ -495,7 +496,7 @@ Status PipelineTask::execute(bool* eos) {
                     auto debug_msg = fmt::format(
                             "Query: {} try to reserve: {}, sink name: {}, node id: {}, task id: "
                             "{}, sink revocable mem size: {}, failed: {}",
-                            print_id(query_context()->query_id()), PrettyPrinter::print_bytes(sink_reserve_size),
+                            print_id(query_id), PrettyPrinter::print_bytes(sink_reserve_size),
                             _sink->get_name(), _sink->node_id(), _state->task_id(),
                             PrettyPrinter::print_bytes(sink_revocable_mem_size),
                             status.to_string());

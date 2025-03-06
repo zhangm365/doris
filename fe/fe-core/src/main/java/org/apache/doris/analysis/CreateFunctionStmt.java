@@ -325,10 +325,10 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
         }
 
 
-         //        userFile = properties.getOrDefault(FILE_KEY, properties.get(OBJECT_FILE_KEY));
-         //         if (Strings.isNullOrEmpty(userFile)) {
-         //         throw new AnalysisException("No 'file' or 'object_file' in properties");
-         //         }
+        // userFile = properties.getOrDefault(FILE_KEY, properties.get(OBJECT_FILE_KEY));
+        // if (Strings.isNullOrEmpty(userFile)) {
+        // throw new AnalysisException("No 'file' or 'object_file' in properties");
+        // }
 
         if (!Strings.isNullOrEmpty(userFile) && binaryType != TFunctionBinaryType.RPC) {
             try {
@@ -363,7 +363,7 @@ public class CreateFunctionStmt extends DdlStmt implements NotFallbackInParser {
                 this.expirationTime = timeMinutes;
             }
         }
-         ***********/
+        ***********/
     }
 
     private Boolean parseBooleanFromProperties(String propertyString) throws AnalysisException {

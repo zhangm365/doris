@@ -190,7 +190,7 @@ public:
     virtual Status execute(FunctionContext* context, Block& block, const ColumnNumbers& arguments,
                            uint32_t result, size_t input_rows_count, bool dry_run = false) const {
 
-        LOG(INFO) << "zhangmao func:" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
 
         return prepare(context, block, arguments, result)
                 ->execute(context, block, arguments, result, input_rows_count, dry_run);
@@ -473,7 +473,7 @@ private:
 
 /*
  * when we register a function which didn't specify its base(i.e. inherited from IFunction), actually we use this as a wrapper.
- * it saves real implementation as `function`.
+
 */
 class DefaultFunction final : public IFunctionBase {
 public:

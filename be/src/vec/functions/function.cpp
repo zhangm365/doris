@@ -116,7 +116,7 @@ inline Status PreparedFunctionImpl::_execute_skipped_constant_deal(
     if (dry_run) {
         return execute_impl_dry_run(context, block, args, result, input_rows_count);
     } else {
-        LOG(INFO) << "Entering PreparedFunctionImpl::" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "Entering " << __PRETTY_FUNCTION__;
         return execute_impl(context, block, args, result, input_rows_count);
     }
 }
@@ -235,7 +235,7 @@ Status PreparedFunctionImpl::execute_without_low_cardinality_columns(
         FunctionContext* context, Block& block, const ColumnNumbers& args, uint32_t result,
         size_t input_rows_count, bool dry_run) const {
 
-    LOG(INFO) << "zhangmao PreparedFunctionImpl::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     bool executed = false;
 
     RETURN_IF_ERROR(default_implementation_for_constant_arguments(
@@ -251,7 +251,7 @@ Status PreparedFunctionImpl::execute(FunctionContext* context, Block& block,
                                      const ColumnNumbers& args, uint32_t result,
                                      size_t input_rows_count, bool dry_run) const {
 
-    LOG(INFO) << "zhangmao PreparedFunctionImpl::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
 
     return execute_without_low_cardinality_columns(context, block, args, result, input_rows_count,
                                                    dry_run);
