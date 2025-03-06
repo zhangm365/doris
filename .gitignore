@@ -147,3 +147,4 @@ be/.clion*
 samples/*
 fe/doris-meta/*
 fe/conf/*
+fe/.idea/*
