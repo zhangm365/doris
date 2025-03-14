@@ -161,7 +161,8 @@ std::string OperatorXBase::debug_string(RuntimeState* state, int indentation_lev
 
 Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
     std::string node_name = print_plan_node_type(tnode.node_type);
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", tnode = " << apache::thrift::ThriftDebugString(tnode);
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "tnode = " << apache::thrift::ThriftDebugString(tnode);
     _nereids_id = tnode.nereids_id;
     LOG(INFO) << "tnode.intermediate_output_tuple_id_list.empty() = " << tnode.intermediate_output_tuple_id_list.empty();
     if (!tnode.intermediate_output_tuple_id_list.empty()) {
@@ -419,6 +420,7 @@ Status DataSinkOperatorXBase::init(const TDataSink& tsink) {
         op_name = it->second;
     }
     _name = op_name + "_OPERATOR";
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << " _name: " << _name;
     return Status::OK();
 }
 

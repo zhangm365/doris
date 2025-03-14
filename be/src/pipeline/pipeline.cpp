@@ -87,7 +87,7 @@ Status Pipeline::add_operator(OperatorPtr& op, const int parallelism) {
 }
 
 Status Pipeline::prepare(RuntimeState* state) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", RuntimeState* state =" << typeid(*state).name();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "_operators.size() = " << _operators.size();
     const auto& op = *(_operators.back());
     LOG(INFO) << ", _operators.back()'type = " << typeid(op).name();

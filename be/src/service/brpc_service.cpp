@@ -60,7 +60,7 @@ BRpcService::~BRpcService() {
 }
 
 Status BRpcService::start(int port, int num_threads) {
-    // Add service
+    // Add service：includes the storage engine and exec env.
     if (config::is_cloud_mode()) {
         _server->AddService(
                 new CloudInternalServiceImpl(_exec_env->storage_engine().to_cloud(), _exec_env),

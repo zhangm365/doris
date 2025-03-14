@@ -333,7 +333,7 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
         }
         LOG(INFO) << "request.fragment.output_sink.type = " << request.fragment.output_sink.type;
         LOG(INFO) << "request.fragment.output_exprs.size() = " << request.fragment.output_exprs.size();
-        // 初始化成员变量 DataSinkOperatorPtr _sink：构造函数创建对象
+        // 根据 (output_sink, output_exprs, output_row_desc) 初始化成员变量 DataSinkOperatorPtr _sink：构造函数创建对象
         RETURN_IF_ERROR(_create_data_sink(_runtime_state->obj_pool(), request.fragment.output_sink,
                                           request.fragment.output_exprs, request,
                                           root_pipeline->output_row_desc(), _runtime_state.get(),
@@ -672,6 +672,8 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
                                                     const bool followed_by_shuffled_operator) {
 
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    // To log the current stack trace
+    LOG(INFO) << "Call stack: " << get_stack_trace_by_glog();
     // propagate error case
     if (*node_idx >= tnodes.size()) {
         return Status::InternalError(
@@ -679,9 +681,9 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
                 *node_idx, tnodes.size());
     }
     const TPlanNode& tnode = tnodes[*node_idx];
-
+    // 每个 node 的孩子节点数
     int num_children = tnodes[*node_idx].num_children;
-    LOG(INFO) << "TPlanNode: tnode.node_type = " << tnode.node_type << ", num_children = " << num_children;
+    LOG(INFO) << "TPlanNode: tnode.node_type = " << tnode.node_type << ", tnode.num_children = " << num_children;
     bool current_followed_by_shuffled_operator = followed_by_shuffled_operator;
     OperatorPtr op = nullptr;
     RETURN_IF_ERROR(_create_operator(pool, tnodes[*node_idx], request, descs, op, cur_pipe,
@@ -689,7 +691,9 @@ Status PipelineFragmentContext::_create_tree_helper(ObjectPool* pool,
                                      followed_by_shuffled_operator));
     // Initialization must be done here. For example, group by expressions in agg will be used to
     // decide if a local shuffle should be planed, so it must be initialized here.
-    LOG(INFO) << "init OperatorPtr <op> = " << op->debug_string() << ", op->type = " << typeid(op.get()).name();
+    LOG(INFO) << "init OperatorPtr <op> = " << op->debug_string();
+    const auto& op_ref = *op;
+    LOG(INFO) << "op->type = " << typeid(op_ref).name();
     RETURN_IF_ERROR(op->init(tnode, _runtime_state.get()));    // 初始化 OperatorPtr op 对象
     // assert(parent != nullptr || (node_idx == 0 && root_expr != nullptr));
     if (parent != nullptr) {

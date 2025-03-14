@@ -187,6 +187,7 @@ VExpr::VExpr(const TExprNode& node)
           _type(TypeDescriptor::from_thrift(node.type)) {
     if (node.__isset.fn) {
         LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", node.fn.name.function_name = " << node.fn.name.function_name;
+        LOG(INFO) << "node.fn = " << node.fn;
         _fn = node.fn;    // initialize _fn
     }
 
@@ -214,9 +215,9 @@ VExpr::VExpr(TypeDescriptor type, bool is_slotref, bool is_nullable)
 
 Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprContext* context) {
 
-    LOG(INFO) << "Entering VExpr::prepare, node_type = " << this->type();
-    LOG(INFO) << "zhangmao VExpr::prepare, before: context->_depth_num = " << context->_depth_num;
-    LOG(INFO) << "zhangmao VExpr::prepare, this->_children.size() = " << this->_children.size();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "node_type = " << this->type() << ", before: context->_depth_num = " << context->_depth_num;
+    LOG(INFO) << "this->_children.size() = " << this->_children.size();
     ++context->_depth_num;
     if (context->_depth_num > config::max_depth_of_expr_tree) {
         return Status::Error<ErrorCode::EXCEEDED_LIMIT>(
@@ -228,7 +229,7 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
         LOG(INFO) << "zhangmao VExpr::prepare, i = " << i->type();
         RETURN_IF_ERROR(i->prepare(state, row_desc, context));
     }
-    LOG(INFO) << "zhangmao VExpr::prepare, after: context->_depth_num = " << context->_depth_num;
+    LOG(INFO) << "after: context->_depth_num = " << context->_depth_num;
     --context->_depth_num;
     _enable_inverted_index_query = state->query_options().enable_inverted_index_query;
     return Status::OK();
@@ -372,6 +373,7 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     int root_children = nodes[*node_idx].num_children;
     VExprSPtr root;
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", root_children = " << root_children;
+    LOG(INFO) << "TExprNode = " << apache::thrift::ThriftDebugString(nodes[*node_idx]);
     RETURN_IF_ERROR(create_expr(nodes[*node_idx], root));
     DCHECK(root != nullptr);
     root_expr = root;
@@ -384,26 +386,32 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     // non-recursive traversal
     std::stack<std::pair<VExprSPtr, int>> s;
     s.emplace(root, root_children);
-    while (!s.empty()) {    // 处理孩子节点
-        // Copy the pair from the top of the stack to safely access parent's pointer.
-        auto parent = s.top();
-        LOG(INFO) << "parent.children = " << parent.second;
-
-        // Update the stack: if more than one child remains, decrement count; otherwise, pop the stack.
-        if (parent.second > 1) {
-            s.top().second -= 1;
-        } else {
-            s.pop();
+    while (!s.empty()) {
+        bool need_pop = false;
+        VExprSPtr current_parent;
+        // scope resource lifecycle for s.top() to avoid dangling reference
+        {
+            auto& top = s.top();
+            current_parent = top.first;  // copy the shared ptr
+            top.second--;
+            if (top.second <= 0) {
+                need_pop = true;
+            }
         }
 
         if (++*node_idx >= nodes.size()) {
             return Status::InternalError("Failed to reconstruct expression tree from thrift.");
         }
+
         VExprSPtr expr;
         RETURN_IF_ERROR(create_expr(nodes[*node_idx], expr));
         DCHECK(expr != nullptr);
-        // Use the local copy of parent's pointer to add the child safely.
-        parent.first->add_child(expr);
+        current_parent->add_child(expr);
+        // stack pop
+        if (need_pop) {
+            s.pop();
+        }
+        // push to stack if has children
         int num_children = nodes[*node_idx].num_children;
         LOG(INFO) << "num_children = " << num_children;
         if (num_children > 0) {
@@ -482,7 +490,8 @@ Status VExpr::check_expr_output_type(const VExprContextSPtrs& ctxs,
 Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
                       const RowDescriptor& row_desc) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
-    LOG(INFO) << "ctxs.size() = " << ctxs.size() << ", row_desc.size() = " << row_desc.debug_string();
+    LOG(INFO) << "ctxs.size() = " << ctxs.size();
+    LOG(INFO) << "row_desc.info = " << row_desc.debug_string();
     for (auto ctx : ctxs) {
         RETURN_IF_ERROR(ctx->prepare(state, row_desc));
     }

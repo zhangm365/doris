@@ -296,7 +296,8 @@ bool PipelineTask::_is_blocked() {
 }
 
 Status PipelineTask::execute(bool* eos) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;\
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "Call stack: " << get_stack_trace_by_glog();
     const auto query_id = _state->query_id();
     if (_eos) {
         *eos = true;
