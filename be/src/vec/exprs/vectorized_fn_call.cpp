@@ -58,7 +58,7 @@ VectorizedFnCall::VectorizedFnCall(const TExprNode& node) : VExpr(node) {}
 Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
                                  VExprContext* context) {
 
-    LOG(INFO) << "zhangmao VectorizedFnCall::" << __PRETTY_FUNCTION__ << ", this->_children.size() = " << _children.size();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", this->_children.size() = " << _children.size();
     RETURN_IF_ERROR_OR_PREPARED(VExpr::prepare(state, desc, context));
     ColumnsWithTypeAndName argument_template;
     argument_template.reserve(_children.size());
@@ -69,8 +69,8 @@ Status VectorizedFnCall::prepare(RuntimeState* state, const RowDescriptor& desc,
     _expr_name = fmt::format("VectorizedFnCall[{}](arguments={},return={})", _fn.name.function_name,
                              get_child_names(), _data_type->get_name());
 
-    LOG(INFO) << "zhangmao _expr_name: " << _expr_name;
-
+    LOG(INFO) << "_expr_name = " << _expr_name;
+    LOG(INFO) << "_fn: " << _fn;
     if (_fn.binary_type == TFunctionBinaryType::RPC) {
         _function = FunctionRPC::create(_fn, argument_template, _data_type);
     } else if (_fn.binary_type == TFunctionBinaryType::JAVA_UDF) {
@@ -148,6 +148,7 @@ Status VectorizedFnCall::open(RuntimeState* state, VExprContext* context,
         LOG(INFO) << "i->type = " << typeid(i).name();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
+    LOG(INFO) << "_function = " << _function;
     // 根据已创建的 IFunctionBase _function，初始化函数上下文。
     RETURN_IF_ERROR(VExpr::init_function_context(state, context, scope, _function));
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
@@ -171,7 +172,7 @@ Status VectorizedFnCall::_do_execute(doris::vectorized::VExprContext* context,
                                      doris::vectorized::Block* block, int* result_column_id,
                                      ColumnNumbers& args) {
 
-    LOG(INFO) << "zhangmao VectorizedFnCall::" << __func__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     if (is_const_and_have_executed()) { // const have executed in open function
         return get_result_from_const(block, _expr_name, result_column_id);
     }
@@ -243,7 +244,7 @@ Status VectorizedFnCall::execute_runtime_fitler(doris::vectorized::VExprContext*
 
 Status VectorizedFnCall::execute(VExprContext* context, vectorized::Block* block,
                                  int* result_column_id) {
-    LOG(INFO)  << "zhangmao VectorizedFnCall::" << __func__;
+    LOG(INFO)  << "zhangmao " << __PRETTY_FUNCTION__;
     ColumnNumbers arguments;
     return _do_execute(context, block, result_column_id, arguments);
 }

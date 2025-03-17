@@ -74,7 +74,7 @@ public:
     // 创建 JavaFunctionCall 实例：由 VectorizedFnCall::prepare 调用。
     static FunctionBasePtr create(const TFunction& fn, const ColumnsWithTypeAndName& argument_types,
                                   const DataTypePtr& return_type) {
-        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
         DataTypes data_types(argument_types.size());
         for (size_t i = 0; i < argument_types.size(); ++i) {
             data_types[i] = argument_types[i].type;
@@ -91,8 +91,9 @@ public:
     PreparedFunctionPtr prepare(FunctionContext* context, const Block& sample_block,
                                 const ColumnNumbers& arguments, uint32_t result) const override {
 
-        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
         LOG(INFO) << "Type of this: " << typeid(*this).name();
+        // set JavaFunctionCall::execute_impl as callback_function.
         return std::make_shared<JavaUdfPreparedFunction>(
                 [this](auto&& PH1, auto&& PH2, auto&& PH3, auto&& PH4, auto&& PH5) {
                     return JavaFunctionCall::execute_impl(

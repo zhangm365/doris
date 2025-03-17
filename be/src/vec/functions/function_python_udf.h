@@ -72,6 +72,7 @@ public:
 
     static FunctionBasePtr create(const TFunction& fn, const ColumnsWithTypeAndName& argument_types,
                                   const DataTypePtr& return_type) {
+        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
         DataTypes data_types(argument_types.size());
         for (size_t i = 0; i < argument_types.size(); ++i) {
             data_types[i] = argument_types[i].type;
@@ -112,7 +113,29 @@ private:
     const TFunction& fn_;
     const DataTypes _argument_types;
     const DataTypePtr _return_type;
+    struct PyArrowContext {
+        // Do not save parent directly, because parent is in VExpr, but PythonArrow context is in FunctionContext
+        // The deconstruct sequence is not determined, it will core.
+        // PyArrowContext's lifecycle should same with function context, not related with expr
 
+        bool is_closed = false;
+        bool open_successes = false;
+
+        PyArrowContext() = default;
+
+        Status close() {
+            if (!open_successes) {
+                LOG_WARNING("maybe open failed, need check the reason");
+                return Status::OK(); //maybe open failed, so can't call some jni
+            }
+            if (is_closed) {
+                return Status::OK();
+            }
+            VLOG_DEBUG << "Free resources for JniContext";
+            is_closed = true;
+            return Status::OK();
+        }
+    };
 };
 
 } // namespace doris::vectorized

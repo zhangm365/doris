@@ -215,7 +215,7 @@ Status OperatorXBase::init(const TPlanNode& tnode, RuntimeState* /*state*/) {
 
 Status OperatorXBase::prepare(RuntimeState* state) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
-    LOG(INFO) << "_conjuncts.size() = " << _conjuncts.size() << ", _projections.size() = " << _projections.size();
+    LOG(INFO) << "_conjuncts.size() = " << _conjuncts.size() << ", _intermediate_projections.size() = " << _intermediate_projections.size();
     for (auto& conjunct : _conjuncts) {
         RETURN_IF_ERROR(conjunct->prepare(state, intermediate_row_desc()));
     }
@@ -223,8 +223,9 @@ Status OperatorXBase::prepare(RuntimeState* state) {
         RETURN_IF_ERROR(vectorized::VExpr::prepare(_intermediate_projections[i], state,
                                                    intermediate_row_desc(i)));
     }
+    LOG(INFO) << "_projections.size() = " << _projections.size();
     RETURN_IF_ERROR(vectorized::VExpr::prepare(_projections, state, projections_row_desc()));
-
+    LOG(INFO) <<"has_output_row_desc() = " << has_output_row_desc();
     if (has_output_row_desc()) {
         RETURN_IF_ERROR(
                 vectorized::VExpr::check_expr_output_type(_projections, *_output_row_descriptor));

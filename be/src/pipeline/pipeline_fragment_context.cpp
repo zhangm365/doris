@@ -338,7 +338,7 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
                                           request.fragment.output_exprs, request,
                                           root_pipeline->output_row_desc(), _runtime_state.get(),
                                           *_desc_tbl, root_pipeline->id()));
-        RETURN_IF_ERROR(_sink->init(request.fragment.output_sink));    // 设置操作符名称
+        RETURN_IF_ERROR(_sink->init(request.fragment.output_sink));    // 设置 sink 操作符名称
         // Pipeline 设置 DataSinkOperatorPtr _sink 成员变量
         RETURN_IF_ERROR(root_pipeline->set_sink(_sink));
 

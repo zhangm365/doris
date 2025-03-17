@@ -224,7 +224,7 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
                 "The depth of the expression tree is too big, make it less than {}",
                 config::max_depth_of_expr_tree);
     }
-
+    // 子节点递归调用 prepare 函数
     for (auto& i : _children) {
         LOG(INFO) << "zhangmao VExpr::prepare, i = " << i->type();
         RETURN_IF_ERROR(i->prepare(state, row_desc, context));
@@ -372,8 +372,9 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     // create root expr
     int root_children = nodes[*node_idx].num_children;
     VExprSPtr root;
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", root_children = " << root_children;
-    LOG(INFO) << "TExprNode = " << apache::thrift::ThriftDebugString(nodes[*node_idx]);
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "TExprNode'type = << " << nodes[*node_idx].node_type << ", root_children = " << root_children;
+    LOG(INFO) << "TExprNode INFO: = " << apache::thrift::ThriftDebugString(nodes[*node_idx]);
     RETURN_IF_ERROR(create_expr(nodes[*node_idx], root));
     DCHECK(root != nullptr);
     root_expr = root;
@@ -392,7 +393,8 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
         // scope resource lifecycle for s.top() to avoid dangling reference
         {
             auto& top = s.top();
-            current_parent = top.first;  // copy the shared ptr
+            current_parent = top.first; // copy the shared ptr
+            LOG(INFO) << "parent'num_children = " << top.second;
             top.second--;
             if (top.second <= 0) {
                 need_pop = true;
@@ -428,7 +430,8 @@ Status VExpr::create_expr_tree(const TExpr& texpr, VExprContextSPtr& ctx) {
     }
     int node_idx = 0;
     VExprSPtr e;
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", texpr.nodes.size() = " << texpr.nodes.size();
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "texpr.nodes.size() = " << texpr.nodes.size();
     Status status = create_tree_from_thrift(texpr.nodes, &node_idx, e, ctx);
     if (status.ok() && node_idx + 1 != texpr.nodes.size()) {
         status = Status::InternalError(
@@ -564,10 +567,12 @@ bool VExpr::is_constant() const {
 Status VExpr::get_const_col(VExprContext* context,
                             std::shared_ptr<ColumnPtrWrapper>* column_wrapper) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "expr = " << this->debug_string();
+    LOG(INFO) << "is_constant = " << is_constant();
     if (!is_constant()) {
         return Status::OK();
     }
-
+    LOG(INFO) << "_constant_col = " << std::boolalpha << (_constant_col == nullptr);
     if (_constant_col != nullptr) {
         DCHECK(column_wrapper != nullptr);
         *column_wrapper = _constant_col;

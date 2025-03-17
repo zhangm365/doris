@@ -35,11 +35,17 @@ PythonFunctionCall::PythonFunctionCall(const TFunction& fn, const DataTypes& arg
 
 Status PythonFunctionCall::open(FunctionContext* context, FunctionContext::FunctionStateScope scope) {
 
-    LOG(INFO) << "params by zhangmao. scope: " << scope;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "scope = " << scope << ", fn_.name = " << fn_.name;
+    // TODO
+    // 1. Get Python UDF executor ENV
 
+    // 2. init the PyArrowContext.
     if (scope == FunctionContext::FunctionStateScope::THREAD_LOCAL) {
         SCOPED_TIMER(context->get_udf_execute_timer());
-
+        std::shared_ptr<PyArrowContext> pyArrow_ctx = std::make_shared<PyArrowContext>();
+        context->set_function_state(FunctionContext::THREAD_LOCAL, pyArrow_ctx);
+        pyArrow_ctx->open_successes = true;
     }
     return Status::OK();
 }
@@ -48,7 +54,7 @@ Status PythonFunctionCall::execute_impl(FunctionContext* context, Block& block,
                                       const ColumnNumbers& arguments, uint32_t result,
                                       size_t num_rows) const {
 
-    LOG(INFO) << "zhangmao PythonFunctionCall::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
 
     return Status::OK();
 }

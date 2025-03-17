@@ -41,7 +41,8 @@ JavaFunctionCall::JavaFunctionCall(const TFunction& fn, const DataTypes& argumen
 
 Status JavaFunctionCall::open(FunctionContext* context, FunctionContext::FunctionStateScope scope) {
 
-    LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__ << ", with scope: " << scope << ", function: " << fn_.name;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "scope = " << scope << ", fn_.name = " << fn_.name;
 
     JNIEnv* env = nullptr;
     RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
@@ -138,7 +139,7 @@ Status JavaFunctionCall::execute_impl(FunctionContext* context, Block& block,
                                       const ColumnNumbers& arguments, uint32_t result,
                                       size_t num_rows) const {
 
-    LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "zhangmao params by = arguments.size() = " << arguments.size() << ", result = " << result << ", num_rows = " << num_rows;
 
     JNIEnv* env = nullptr;
