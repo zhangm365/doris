@@ -72,7 +72,7 @@ public:
 
     static FunctionBasePtr create(const TFunction& fn, const ColumnsWithTypeAndName& argument_types,
                                   const DataTypePtr& return_type) {
-        LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+        LOG(INFO) << "zhangmao JavaFunctionCall::" << __PRETTY_FUNCTION__;
         DataTypes data_types(argument_types.size());
         for (size_t i = 0; i < argument_types.size(); ++i) {
             data_types[i] = argument_types[i].type;

@@ -618,8 +618,7 @@ Status VExpr::init_function_context(RuntimeState* state, VExprContext* context,
 
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", scope = " << scope;
     LOG(INFO) << "function->is_udf_function() = " << function->is_udf_function();
-    const auto& function_dref = *function;
-    LOG(INFO) << "function'name = " << typeid(function_dref).name();
+
     FunctionContext* fn_ctx = context->fn_context(_fn_context_index);
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
         LOG(INFO) << "Entering: scope == FunctionContext::FRAGMENT_LOCAL";

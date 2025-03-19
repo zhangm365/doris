@@ -83,7 +83,6 @@ Status Pipeline::add_operator(OperatorPtr& op, const int parallelism) {
     if (op->is_source()) {
         std::reverse(_operators.begin(), _operators.end());
     }
-    LOG(INFO) << "_operators.size() = " << _operators.size();
     return Status::OK();
 }
 
@@ -91,7 +90,7 @@ Status Pipeline::prepare(RuntimeState* state) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "_operators.size() = " << _operators.size();
     const auto& op = *(_operators.back());
-    LOG(INFO) << "_operators.back()'type = " << typeid(op).name();
+    LOG(INFO) << ", _operators.back()'type = " << typeid(op).name();
     LOG(INFO) << "_operators.back() info: " << _operators.back()->debug_string();
     RETURN_IF_ERROR(_operators.back()->prepare(state));    // 从最后一个 operator 开始
 

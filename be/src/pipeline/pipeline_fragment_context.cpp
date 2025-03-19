@@ -347,7 +347,6 @@ Status PipelineFragmentContext::prepare(const doris::TPipelineFragmentParams& re
             RETURN_IF_ERROR(pipeline->sink()->set_child(pipeline->operators().back()));
         }
     }
-    LOG(INFO) << "_runtime_state->enable_local_shuffle() = " << _runtime_state->enable_local_shuffle();
     // 4. Build local exchanger
     if (_runtime_state->enable_local_shuffle()) {
         SCOPED_TIMER(_plan_local_exchanger_timer);
@@ -755,8 +754,6 @@ Status PipelineFragmentContext::_add_local_exchange_impl(
         DataDistribution data_distribution, bool* do_local_exchange, int num_buckets,
         const std::map<int, int>& bucket_seq_to_instance_idx,
         const std::map<int, int>& shuffle_idx_to_instance_idx) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
-    LOG(INFO) << "data_distribution.distribution_type = " << static_cast<int>(data_distribution.distribution_type);
     auto& operators = cur_pipe->operators();
     const auto downstream_pipeline_id = cur_pipe->id();
     auto local_exchange_id = next_operator_id();
@@ -949,7 +946,7 @@ Status PipelineFragmentContext::_add_local_exchange(
     if (_num_instances <= 1 || cur_pipe->num_tasks_of_parent() <= 1) {
         return Status::OK();
     }
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+
     if (!cur_pipe->need_to_local_exchange(data_distribution, idx)) {
         return Status::OK();
     }
