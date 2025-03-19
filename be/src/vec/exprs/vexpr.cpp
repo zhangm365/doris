@@ -373,12 +373,12 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
     int root_children = nodes[*node_idx].num_children;
     VExprSPtr root;
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
-    LOG(INFO) << "TExprNode'type = << " << nodes[*node_idx].node_type << ", root_children = " << root_children;
+    LOG(INFO) << "TExprNode'type = " << nodes[*node_idx].node_type << ", root_children = " << root_children;
     LOG(INFO) << "TExprNode INFO: = " << apache::thrift::ThriftDebugString(nodes[*node_idx]);
     RETURN_IF_ERROR(create_expr(nodes[*node_idx], root));
     DCHECK(root != nullptr);
     root_expr = root;
-    ctx = std::make_shared<VExprContext>(root_expr);
+    ctx = std::make_shared<VExprContext>(root);
     // short path for leaf node
     if (root_children <= 0) {
         return Status::OK();
