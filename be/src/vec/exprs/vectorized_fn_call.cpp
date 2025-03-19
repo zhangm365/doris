@@ -148,7 +148,7 @@ Status VectorizedFnCall::open(RuntimeState* state, VExprContext* context,
         LOG(INFO) << "i->type = " << typeid(i).name();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
-    LOG(INFO) << "_function = " << _function;
+    LOG(INFO) << "_function = " << _function->get_name();
     // 根据已创建的 IFunctionBase _function，初始化函数上下文。
     RETURN_IF_ERROR(VExpr::init_function_context(state, context, scope, _function));
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
