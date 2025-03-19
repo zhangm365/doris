@@ -237,7 +237,7 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
 
 Status VExpr::open(RuntimeState* state, VExprContext* context,
                    FunctionContext::FunctionStateScope scope) {
-
+    LOG(INFO) << "Call Stack: " << get_stack_trace_by_glog();
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "scope = " << scope << ", this->_children.size() = " << this->_children.size();
     for (auto& i : _children) {
@@ -394,6 +394,8 @@ Status VExpr::create_tree_from_thrift(const std::vector<TExprNode>& nodes, int* 
         {
             auto& top = s.top();
             current_parent = top.first; // copy the shared ptr
+            const auto& root_dref = *current_parent;
+            LOG(INFO) << "parent's type = " << typeid(root_dref).name();
             LOG(INFO) << "parent'num_children = " << top.second;
             top.second--;
             if (top.second <= 0) {
@@ -493,6 +495,8 @@ Status VExpr::check_expr_output_type(const VExprContextSPtrs& ctxs,
 Status VExpr::prepare(const VExprContextSPtrs& ctxs, RuntimeState* state,
                       const RowDescriptor& row_desc) {
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    LOG(INFO) << "Call stack: ";
+    LOG(INFO) << get_stack_trace_by_glog();
     LOG(INFO) << "ctxs.size() = " << ctxs.size();
     LOG(INFO) << "row_desc.info = " << row_desc.debug_string();
     for (auto ctx : ctxs) {

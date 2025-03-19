@@ -52,6 +52,7 @@ VSlotRef::VSlotRef(const SlotDescriptor* desc)
 
 Status VSlotRef::prepare(doris::RuntimeState* state, const doris::RowDescriptor& desc,
                          VExprContext* context) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     RETURN_IF_ERROR_OR_PREPARED(VExpr::prepare(state, desc, context));
     DCHECK_EQ(_children.size(), 0);
     if (_slot_id == -1) {
@@ -64,6 +65,7 @@ Status VSlotRef::prepare(doris::RuntimeState* state, const doris::RowDescriptor&
                 "couldn't resolve slot descriptor {}, desc: {}", _slot_id,
                 state->desc_tbl().debug_string());
     }
+    LOG(INFO) << "slot_desc = " << slot_desc->debug_string();
     _column_name = &slot_desc->col_name();
     if (!context->force_materialize_slot() && !slot_desc->is_materialized()) {
         // slot should be ignored manually
@@ -84,6 +86,7 @@ Status VSlotRef::prepare(doris::RuntimeState* state, const doris::RowDescriptor&
 
 Status VSlotRef::open(RuntimeState* state, VExprContext* context,
                       FunctionContext::FunctionStateScope scope) {
+    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     DCHECK(_prepare_finished);
     RETURN_IF_ERROR(VExpr::open(state, context, scope));
     _open_finished = true;

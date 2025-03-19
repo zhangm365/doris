@@ -110,16 +110,18 @@ Status VExprContext::clone(RuntimeState* state, VExprContextSPtr& new_ctx) {
     DCHECK(_prepared) << "expr context not prepared";
     DCHECK(_opened);
     DCHECK(new_ctx.get() == nullptr);
-
+    LOG(INFO) << "_fn_contexts.size = " << _fn_contexts.size();
     new_ctx = std::make_shared<VExprContext>(_root);
     for (auto& _fn_context : _fn_contexts) {
+        LOG(INFO) << "_fn_context = " << _fn_context->get_num_args();
         new_ctx->_fn_contexts.push_back(_fn_context->clone());
     }
 
     new_ctx->_is_clone = true;
     new_ctx->_prepared = true;
     new_ctx->_opened = true;
-
+    const auto& root_ref = *_root;
+    LOG(INFO) << "_root = " << typeid(root_ref).name();
     return _root->open(state, new_ctx.get(), FunctionContext::THREAD_LOCAL);
 }
 

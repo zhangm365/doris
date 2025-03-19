@@ -110,7 +110,8 @@ Status PipelineTask::prepare(const std::vector<TScanRangeParams>& scan_range, co
     LOG(INFO) << "_operators.size() = " << _operators.size();
     for (int op_idx = _operators.size() - 1; op_idx >= 0; op_idx--) {
         auto& op = _operators[op_idx];
-        LOG(INFO) << "op = " << typeid(op).name();
+        const auto& op_dref = *op;
+        LOG(INFO) << "op = " << typeid(op_dref).name();
         LocalStateInfo info {parent_profile, _scan_ranges, get_op_shared_state(op->operator_id()),
                              _le_state_map, _task_idx};
         RETURN_IF_ERROR(op->setup_local_state(_state, info));
