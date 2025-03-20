@@ -78,8 +78,8 @@ Status VExprContext::prepare(RuntimeState* state, const RowDescriptor& row_desc)
 Status VExprContext::open(RuntimeState* state) {
 
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", _is_clone = " << _is_clone;
-    const auto& root_ref = *_root;
-    LOG(INFO) << "_root = " << typeid(root_ref).name();
+    const auto& root_dref = *_root;
+    LOG(INFO) << "_root = " << typeid(root_dref).name();
     DCHECK(_prepared);
     if (_opened) {
         return Status::OK();

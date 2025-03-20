@@ -514,7 +514,7 @@ void PInternalService::tablet_writer_cancel(google::protobuf::RpcController* con
 Status PInternalService::_exec_plan_fragment_impl(
         const std::string& ser_request, PFragmentRequestVersion version, bool compact,
         const std::function<void(RuntimeState*, Status*)>& cb) {
-    LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
+    // LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     // Sometimes the BE do not receive the first heartbeat message and it receives request from FE
     // If BE execute this fragment, it will core when it wants to get some property from master info.
     if (ExecEnv::GetInstance()->cluster_info() == nullptr) {

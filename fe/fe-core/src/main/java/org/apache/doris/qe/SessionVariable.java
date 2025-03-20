@@ -1756,7 +1756,7 @@ public class SessionVariable implements Serializable, Writable {
     public int useFixReplica = -1;
 
     @VariableMgr.VarAttr(name = DUMP_NEREIDS_MEMO)
-    public boolean dumpNereidsMemo = true;
+    public boolean dumpNereidsMemo = false;
 
     @VariableMgr.VarAttr(name = "memo_max_group_expression_size")
     public int memoMaxGroupExpressionSize = 10000;

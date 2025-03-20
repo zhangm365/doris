@@ -145,7 +145,8 @@ Status VectorizedFnCall::open(RuntimeState* state, VExprContext* context,
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", scope = " << scope;
     LOG(INFO) << "this->_children.size() = " << _children.size();
     for (auto& i : _children) {
-        LOG(INFO) << "i->type = " << typeid(i).name();
+        const auto& child_dref = *i;
+        LOG(INFO) << "child->type = " << typeid(child_dref).name();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
     LOG(INFO) << "_function = " << _function->get_name();

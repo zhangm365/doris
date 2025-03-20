@@ -226,7 +226,9 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
     }
     // 子节点递归调用 prepare 函数
     for (auto& i : _children) {
-        LOG(INFO) << "zhangmao VExpr::prepare, i = " << i->type();
+        const auto& child_dref = *i;
+        LOG(INFO) << "i->type = " << typeid(child_dref).name();
+        LOG(INFO) << "i = " << i->type();
         RETURN_IF_ERROR(i->prepare(state, row_desc, context));
     }
     LOG(INFO) << "after: context->_depth_num = " << context->_depth_num;
@@ -237,11 +239,13 @@ Status VExpr::prepare(RuntimeState* state, const RowDescriptor& row_desc, VExprC
 
 Status VExpr::open(RuntimeState* state, VExprContext* context,
                    FunctionContext::FunctionStateScope scope) {
-    LOG(INFO) << "Call Stack: " << get_stack_trace_by_glog();
+    // LOG(INFO) << "Call Stack: " << get_stack_trace_by_glog();
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__;
     LOG(INFO) << "scope = " << scope << ", this->_children.size() = " << this->_children.size();
     for (auto& i : _children) {
-        LOG(INFO) << "zhangmao, i = " << i << ", i.type = " << i->type();
+        const auto& child_dref = *i;
+        LOG(INFO) << "i->type = " << typeid(child_dref).name();
+        LOG(INFO) << "i.type = " << i->type();
         RETURN_IF_ERROR(i->open(state, context, scope));
     }
     if (scope == FunctionContext::FRAGMENT_LOCAL) {
@@ -259,6 +263,7 @@ void VExpr::close(VExprContext* context, FunctionContext::FunctionStateScope sco
 // NOLINTBEGIN(readability-function-size)
 Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {    // 根据表达式节点类型创建表达式对象。
     LOG(INFO) << "zhangmao " << __PRETTY_FUNCTION__ << ", expr_node.node_type = " << expr_node.node_type;
+    LOG(INFO) << "expr_node = " << apache::thrift::ThriftDebugString(expr_node);
     try {
         switch (expr_node.node_type) {
         case TExprNodeType::BOOL_LITERAL:
