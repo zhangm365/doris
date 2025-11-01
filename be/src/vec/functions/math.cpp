@@ -306,7 +306,8 @@ struct NegativeImpl {
 
     NO_SANITIZE_UNDEFINED static inline typename PrimitiveTypeTraits<ResultType>::ColumnItemType
     apply(A a) {
-        return -a;
+        using ResultT = typename PrimitiveTypeTraits<ResultType>::ColumnItemType;
+        return static_cast<ResultT>(-a);
     }
 };
 
