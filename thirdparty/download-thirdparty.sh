@@ -54,9 +54,11 @@ SPEC_ARCHIVES=(
 )
 while [[ $# -gt 0 ]]; do
     GIVEN_LIB=$1
+    GIVEN_LIB_LOWER="$(printf '%s' "${GIVEN_LIB}" | tr '[:upper:]' '[:lower:]')"
     SPEC_LIB=
     for TP_ARCH in "${TP_ARCHIVES[@]}"; do
-        if [[ "${GIVEN_LIB,,}" = "${TP_ARCH,,}" ]]; then
+        TP_ARCH_LOWER="$(printf '%s' "${TP_ARCH}" | tr '[:upper:]' '[:lower:]')"
+        if [[ "${GIVEN_LIB_LOWER}" = "${TP_ARCH_LOWER}" ]]; then
             SPEC_LIB=${TP_ARCH}
             break
         fi

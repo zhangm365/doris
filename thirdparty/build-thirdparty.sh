@@ -494,14 +494,15 @@ build_glog() {
         make -j "${PARALLEL}"
         make install
     elif [[ "${GLOG_SOURCE}" == "glog-0.6.0" ]]; then
-        LDFLAGS="-L${TP_LIB_DIR}" \
+        LDFLAGS="-L${TP_LIB_DIR} ${LDFLAGS}" \
             "${CMAKE_CMD}" -S . -B build -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="${TP_INSTALL_DIR}" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DWITH_UNWIND=OFF \
             -DBUILD_SHARED_LIBS=OFF \
-            -DWITH_TLS=OFF
+            -DWITH_TLS=OFF \
+            -DBUILD_TESTING=OFF
 
         "${CMAKE_CMD}" --build build --target install
     fi
@@ -676,21 +677,46 @@ build_curl() {
     check_if_source_exist "${CURL_SOURCE}"
     cd "${TP_SOURCE_DIR}/${CURL_SOURCE}"
 
-    if [[ "${KERNEL}" != 'Darwin' ]]; then
-        libs='-lcrypto -lssl -lcrypto -ldl -static'
-    else
-        libs='-lcrypto -lssl -lcrypto -ldl'
+    local openssl_prefix
+    openssl_prefix="${OPENSSL_PREFIX:-$(brew --prefix openssl@3 2>/dev/null || true)}"
+    if [[ -z "${openssl_prefix}" ]]; then
+        openssl_prefix="${TP_INSTALL_DIR}"
     fi
 
-    CPPFLAGS="-I${TP_INCLUDE_DIR} " \
-        LDFLAGS="-L${TP_LIB_DIR}" LIBS="${libs}" \
+    local curl_cppflags="-I${openssl_prefix}/include -I${TP_INCLUDE_DIR} ${CPPFLAGS}"
+    local curl_ldflags="-L${openssl_prefix}/lib -Wl,-rpath,${openssl_prefix}/lib -L${TP_LIB_DIR} ${LDFLAGS}"
+    local curl_pkgconfig_path="${openssl_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+
+    local libs
+    if [[ "${KERNEL}" != 'Darwin' ]]; then
+        libs="-L${openssl_prefix}/lib -lcrypto -lssl -lcrypto -ldl -static"
+    else
+        libs="-L${openssl_prefix}/lib -lcrypto -lssl -lcrypto -ldl"
+    fi
+
+    env \
+        CPPFLAGS="${curl_cppflags}" \
+        LDFLAGS="${curl_ldflags}" \
+        LIBS="${libs}" \
         PKG_CONFIG="pkg-config --static" \
+        PKG_CONFIG_PATH="${curl_pkgconfig_path}" \
+        OPENSSL_ROOT_DIR="${openssl_prefix}" \
         ./configure --prefix="${TP_INSTALL_DIR}" --disable-shared --enable-static \
-        --without-librtmp --with-ssl="${TP_INSTALL_DIR}" --without-libidn2 --disable-ldap --enable-ipv6 \
+        --without-librtmp --with-ssl="${openssl_prefix}" --without-libidn2 --disable-ldap --enable-ipv6 \
         --without-libssh2 --without-brotli --without-nghttp2
 
-    make curl_LDFLAGS=-all-static -j "${PARALLEL}"
-    make curl_LDFLAGS=-all-static install
+    env \
+        CPPFLAGS="${curl_cppflags}" \
+        LDFLAGS="${curl_ldflags}" \
+        PKG_CONFIG_PATH="${curl_pkgconfig_path}" \
+        OPENSSL_ROOT_DIR="${openssl_prefix}" \
+        make curl_LDFLAGS=-all-static -j "${PARALLEL}"
+    env \
+        CPPFLAGS="${curl_cppflags}" \
+        LDFLAGS="${curl_ldflags}" \
+        PKG_CONFIG_PATH="${curl_pkgconfig_path}" \
+        OPENSSL_ROOT_DIR="${openssl_prefix}" \
+        make curl_LDFLAGS=-all-static install
     strip_lib libcurl.a
 }
 
@@ -833,9 +859,9 @@ build_brpc() {
     rm -rf CMakeCache.txt CMakeFiles/
 
     if [[ "${KERNEL}" != 'Darwin' ]]; then
-        ldflags="-L${TP_LIB_DIR} -static-libstdc++ -static-libgcc"
+        ldflags="-L${TP_LIB_DIR} -static-libstdc++ -static-libgcc -lsnappy"
     else
-        ldflags="-L${TP_LIB_DIR}"
+        ldflags="-L${TP_LIB_DIR} -lsnappy"
 
         # Don't set OPENSSL_ROOT_DIR
         sed '/set(OPENSSL_ROOT_DIR/,/)/ d' ../CMakeLists.txt >../CMakeLists.txt.bak
@@ -853,6 +879,8 @@ build_brpc() {
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_LIBRARY_PATH="${TP_INSTALL_DIR}/lib64" -DCMAKE_INCLUDE_PATH="${TP_INSTALL_DIR}/include" \
         -DBUILD_BRPC_TOOLS=OFF \
+        -DSnappy_ROOT="${TP_INSTALL_DIR}" \
+        -DSNAPPY_ROOT="${TP_INSTALL_DIR}" \
         -DPROTOBUF_PROTOC_EXECUTABLE="${TP_INSTALL_DIR}/bin/protoc" ..
 
     "${BUILD_SYSTEM}" -j "${PARALLEL}"
@@ -881,7 +909,9 @@ build_rocksdb() {
     # -Wno-range-loop-construct gcc-11
     CFLAGS="-I ${TP_INCLUDE_DIR} -I ${TP_INCLUDE_DIR}/snappy -I ${TP_INCLUDE_DIR}/lz4" \
         CXXFLAGS="-include cstdint -Wno-deprecated-copy ${warning_stringop_truncation} ${warning_shadow} ${warning_dangling_gsl} \
-    ${warning_defaulted_function_deleted} ${warning_unused_but_set_variable} -Wno-pessimizing-move -Wno-range-loop-construct" \
+        ${warning_defaulted_function_deleted} ${warning_unused_but_set_variable} -Wno-pessimizing-move -Wno-range-loop-construct \
+        -Wno-unnecessary-virtual-specifier -Wno-error=unnecessary-virtual-specifier -Wno-character-conversion \
+        -Wno-error=character-conversion" \
         LDFLAGS="${ldflags}" \
         PORTABLE=1 make USE_RTTI=1 -j "${PARALLEL}" static_lib
     cp librocksdb.a ../../installed/lib/librocksdb.a
@@ -967,6 +997,8 @@ build_flatbuffers() {
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DFLATBUFFERS_CXX_FLAGS="${warning_class_memaccess} ${warning_unused_but_set_variable}" \
         -DFLATBUFFERS_BUILD_TESTS=OFF \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_CXX_STANDARD_REQUIRED=ON \
         ..
 
     "${BUILD_SYSTEM}" -j "${PARALLEL}"
@@ -1025,6 +1057,14 @@ build_grpc() {
         -DgRPC_ZLIB_PROVIDER=package \
         -DZLIB_ROOT="${TP_INSTALL_DIR}" \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DgRPC_PROTOBUF_PROVIDER=package \
+        -DProtobuf_DIR="${TP_INSTALL_DIR}/lib64/cmake/protobuf" \
+        -DProtobuf_ROOT="${TP_INSTALL_DIR}" \
+        -DProtobuf_INCLUDE_DIR="${TP_INSTALL_DIR}/include" \
+        -DProtobuf_LIBRARY="${TP_INSTALL_DIR}/lib/libprotobuf.a" \
+        -DProtobuf_PROTOC_EXECUTABLE="${TP_INSTALL_DIR}/bin/protoc" \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_CXX_STANDARD_REQUIRED=ON \
         ../..
 
     make -j "${PARALLEL}"
@@ -1309,12 +1349,17 @@ build_orc() {
     check_if_source_exist "${ORC_SOURCE}"
     cd "${TP_SOURCE_DIR}/${ORC_SOURCE}"
 
+    # Force ORC to use the protobuf toolchain bundled with Doris instead of
+    # picking up system installations, which tend to be ABI-incompatible.
+    export PROTOBUF_HOME="${TP_INSTALL_DIR}"
+    export PATH="${TP_INSTALL_DIR}/bin:${PATH}"
+
     mkdir -p "${BUILD_DIR}"
     cd "${BUILD_DIR}"
 
     rm -rf CMakeCache.txt CMakeFiles/
 
-    CXXFLAGS="-O3 -Wno-array-bounds ${warning_reserved_identifier} ${warning_suggest_override}" \
+    CXXFLAGS="-O3 -Wno-array-bounds ${warning_reserved_identifier} ${warning_suggest_override} -I${TP_INSTALL_DIR}/include" \
         "${CMAKE_CMD}" -G "${GENERATOR}" ../ -DBUILD_JAVA=OFF \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DPROTOBUF_HOME="${TP_INSTALL_DIR}" \
@@ -1328,6 +1373,55 @@ build_orc() {
         -DBUILD_CPP_TESTS=OFF \
         -DSTOP_BUILD_ON_WARNING=OFF \
         -DCMAKE_INSTALL_PREFIX="${TP_INSTALL_DIR}"
+
+    "${BUILD_SYSTEM}" c++/src/orc_proto.pb.h >/dev/null 2>&1 || true
+
+    local orc_pb_header="${TP_SOURCE_DIR}/${ORC_SOURCE}/${BUILD_DIR}/c++/src/orc_proto.pb.h"
+    if [[ -f "${orc_pb_header}" ]]; then
+        python3 - "${orc_pb_header}" "${TP_INSTALL_DIR}/include/google/protobuf/arena.h" <<'PY'
+from pathlib import Path
+import sys
+
+header_path = Path(sys.argv[1])
+arena_header = Path(sys.argv[2])
+text = header_path.read_text()
+
+# Ensure namespace macros still exist when building with protobuf >= 21.
+fallback = """#undef PROTOBUF_NAMESPACE_OPEN
+#define PROTOBUF_NAMESPACE_OPEN \\
+  namespace google {            \\
+  namespace protobuf {
+#undef PROTOBUF_NAMESPACE_CLOSE
+#define PROTOBUF_NAMESPACE_CLOSE \\
+  } /* namespace protobuf */     \\
+  } /* namespace google */
+#ifndef PROTOBUF_NAMESPACE_ID
+#define PROTOBUF_NAMESPACE_ID google::protobuf
+#endif
+"""
+
+anchor = "#define PROTOBUF_INTERNAL_EXPORT_orc_5fproto_2eproto\n"
+if anchor in text:
+    text = text.replace(anchor, anchor + fallback, 1)
+
+text = text.replace(
+    "Arena::CreateMaybeMessage",
+    "::PROTOBUF_NAMESPACE_ID::Arena::CreateMaybeMessage",
+)
+text = text.replace(
+    "(Arena*)",
+    "(::PROTOBUF_NAMESPACE_ID::Arena*)",
+)
+
+if "CreateMaybeMessage" not in arena_header.read_text():
+    text = text.replace(
+        "::PROTOBUF_NAMESPACE_ID::Arena::CreateMaybeMessage",
+        "::PROTOBUF_NAMESPACE_ID::Arena::CreateMessage",
+    )
+
+header_path.write_text(text)
+PY
+    fi
 
     "${BUILD_SYSTEM}" -j "${PARALLEL}"
     "${BUILD_SYSTEM}" install
