@@ -20,6 +20,13 @@
 # check DORIS_HOME
 export LC_ALL=C
 
+# unset Homebrew compile env(include/lib path) to avoid conflict
+unset CPATH
+unset C_INCLUDE_PATH
+unset CPLUS_INCLUDE_PATH
+unset CPPFLAGS
+unset LDFLAGS
+
 if [[ -z "${DORIS_HOME}" ]]; then
     echo "Error: DORIS_HOME is not set"
     exit 1
@@ -146,12 +153,24 @@ if [[ "${DORIS_TOOLCHAIN}" == "gcc" ]]; then
 elif [[ "${DORIS_TOOLCHAIN}" == "clang" ]]; then
     # set CLANG HOME
     if [[ -z "${DORIS_CLANG_HOME}" ]]; then
-        DORIS_CLANG_HOME="$(dirname "$(command -v clang)")"/..
+        BREW_LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null || true)"
+        if [[ -n "${BREW_LLVM_PREFIX}" && -x "${BREW_LLVM_PREFIX}/bin/clang++" ]]; then
+            DORIS_CLANG_HOME="${BREW_LLVM_PREFIX}"
+        else
+            DORIS_CLANG_HOME="$(dirname "$(command -v clang)")"/..
+        fi
         export DORIS_CLANG_HOME
     fi
 
     export CC="${DORIS_CLANG_HOME}/bin/clang"
     export CXX="${DORIS_CLANG_HOME}/bin/clang++"
+    LIBOMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+    if [[ -n "${LIBOMP_PREFIX}" ]]; then
+        export OpenMP_ROOT="${LIBOMP_PREFIX}"
+        export CPPFLAGS="-I${LIBOMP_PREFIX}/include ${CPPFLAGS}"
+        export LDFLAGS="-L${LIBOMP_PREFIX}/lib ${LDFLAGS}"
+    fi
+
     if test -x "${DORIS_CLANG_HOME}/bin/ld.lld"; then
         export DORIS_BIN_UTILS="${DORIS_CLANG_HOME}/bin/"
     fi
