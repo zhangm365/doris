@@ -22,17 +22,10 @@ package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.AggStateType;
 import org.apache.doris.catalog.Function;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.common.FormatOptions;
+import org.apache.doris.common.NameFormatUtils;
 import org.apache.doris.common.TreeNode;
-import org.apache.doris.nereids.util.Utils;
-import org.apache.doris.planner.normalize.Normalizer;
-import org.apache.doris.thrift.TExpr;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprOpcode;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
@@ -46,9 +39,7 @@ import com.google.gson.annotations.SerializedName;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -59,53 +50,34 @@ import java.util.function.Supplier;
  */
 public abstract class Expr extends TreeNode<Expr> implements Cloneable {
 
-    public static final String AGG_STATE_SUFFIX = "_state";
-    public static final String AGG_UNION_SUFFIX = "_union";
-    public static final String AGG_MERGE_SUFFIX = "_merge";
-    public static final String AGG_FOREACH_SUFFIX = "_foreach";
     public static final String DEFAULT_EXPR_NAME = "expr";
 
-    protected boolean disableTableName = false;
-
-    protected Optional<Boolean> nullableFromNereids = Optional.empty();
-    protected Optional<Boolean> originCastNullable = Optional.empty();
+    protected boolean nullable = false;
 
     @SerializedName("type")
     protected Type type;  // result of analysis
-
-    protected boolean isAnalyzed = false;  // true after analyze() has been called
-
-    @SerializedName("opcode")
-    protected TExprOpcode opcode;  // opcode for this expr
 
     // The function to call. This can either be a scalar or aggregate function.
     // Set in analyze().
     protected Function fn;
 
     // Cached value of IsConstant(), set during analyze() and valid if isAnalyzed_ is true.
-    private Supplier<Boolean> isConstant = Suppliers.memoize(() -> false);
+    private Supplier<Boolean> isConstant = Suppliers.memoize(this::isConstantImpl);
 
     protected Optional<String> exprName = Optional.empty();
 
     protected Expr() {
         super();
         type = Type.INVALID;
-        opcode = TExprOpcode.INVALID_OPCODE;
     }
 
     protected Expr(Expr other) {
         super();
         type = other.type;
-        isAnalyzed = other.isAnalyzed;
-        opcode = other.opcode;
         isConstant = other.isConstant;
         fn = other.fn;
         children = Expr.cloneList(other.children);
-        nullableFromNereids = other.nullableFromNereids;
-    }
-
-    public boolean isAnalyzed() {
-        return isAnalyzed;
+        nullable = other.nullable;
     }
 
     public void checkValueValid() throws AnalysisException {
@@ -115,7 +87,8 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
     // alias or is not slotRef
     public String getExprName() {
         if (!this.exprName.isPresent()) {
-            this.exprName = Optional.of(Utils.normalizeName(this.getClass().getSimpleName(), DEFAULT_EXPR_NAME));
+            this.exprName = Optional.of(
+                    NameFormatUtils.normalizeName(this.getClass().getSimpleName(), DEFAULT_EXPR_NAME));
         }
         return this.exprName.get();
     }
@@ -129,23 +102,8 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         this.type = type;
     }
 
-    public TExprOpcode getOpcode() {
-        return opcode;
-    }
-
     public Function getFn() {
         return fn;
-    }
-
-    /**
-     * Set the expr to be analyzed and computes isConstant_.
-     */
-    protected void analysisDone() {
-        Preconditions.checkState(!isAnalyzed);
-        // We need to compute the const-ness as the last step, since analysis may change
-        // the result, e.g. by resolving function.
-        isConstant = Suppliers.memoize(this::isConstantImpl);
-        isAnalyzed = true;
     }
 
     /**
@@ -167,31 +125,10 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         return childNullables;
     }
 
-    public List<Expr> getChildrenWithoutCast() {
-        List<Expr> result = new ArrayList<>();
-        for (int i = 0; i < children.size(); ++i) {
-            if (children.get(i) instanceof CastExpr) {
-                CastExpr castExpr = (CastExpr) children.get(i);
-                result.add(castExpr.getChild(0));
-            } else {
-                result.add(children.get(i));
-            }
-        }
-        return result;
-    }
-
     public Expr getChildWithoutCast(int i) {
         Preconditions.checkArgument(i < children.size(), "child index {0} out of range {1}", i, children.size());
         Expr child = children.get(i);
         return child instanceof CastExpr ? child.children.get(0) : child;
-    }
-
-    public static List<TExpr> treesToThrift(List<? extends Expr> exprs) {
-        List<TExpr> result = Lists.newArrayList();
-        for (Expr expr : exprs) {
-            result.add(expr.treeToThrift());
-        }
-        return result;
     }
 
     public static String debugString(List<? extends Expr> exprs) {
@@ -203,44 +140,6 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
             strings.add(Strings.nullToEmpty(expr.debugString()));
         }
         return "(" + Joiner.on(" ").join(strings) + ")";
-    }
-
-    /**
-     * Return true if l1 equals l2 when both lists are interpreted as sets.
-     */
-    public static <C extends Expr> boolean equalSets(List<C> l1, List<C> l2) {
-        if (l1.size() != l2.size()) {
-            return false;
-        }
-        Map cMap1 = toCountMap(l1);
-        Map cMap2 = toCountMap(l2);
-        if (cMap1.size() != cMap2.size()) {
-            return false;
-        }
-        Iterator it = cMap1.keySet().iterator();
-        while (it.hasNext()) {
-            C obj = (C) it.next();
-            Integer count1 = (Integer) cMap1.get(obj);
-            Integer count2 = (Integer) cMap2.get(obj);
-            if (count2 == null || count1 != count2) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public static <C extends Expr> HashMap<C, Integer> toCountMap(List<C> list) {
-        HashMap countMap = new HashMap<C, Integer>();
-        for (int i = 0; i < list.size(); i++) {
-            C obj = list.get(i);
-            Integer count = (Integer) countMap.get(obj);
-            if (count == null) {
-                countMap.put(obj, 1);
-            } else {
-                countMap.put(obj, count + 1);
-            }
-        }
-        return countMap;
     }
 
     /**
@@ -282,22 +181,6 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         }
     }
 
-    /**
-     * get the expr which in l1 and l2 in the same time.
-     * Return the intersection of l1 and l2
-     */
-    public static <C extends Expr> List<C> intersect(List<C> l1, List<C> l2) {
-        List<C> result = new ArrayList<C>();
-
-        for (C element : l1) {
-            if (l2.contains(element)) {
-                result.add(element);
-            }
-        }
-
-        return result;
-    }
-
     public static void extractSlots(Expr root, Set<SlotId> slotIdSet) {
         if (root instanceof SlotRef) {
             slotIdSet.add(((SlotRef) root).getDesc().getId());
@@ -309,115 +192,10 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
     }
 
     /**
-     * Removes duplicate exprs (according to equals()).
+     * Accept a visitor and dispatch to the appropriate typed {@code visitXxx} method.
+     * Each concrete subclass must override this to call the correct visitor method.
      */
-    public static <C extends Expr> void removeDuplicates(List<C> l) {
-        if (l == null) {
-            return;
-        }
-        ListIterator<C> it1 = l.listIterator();
-        while (it1.hasNext()) {
-            C e1 = it1.next();
-            ListIterator<C> it2 = l.listIterator();
-            boolean duplicate = false;
-            while (it2.hasNext()) {
-                C e2 = it2.next();
-                if (e1 == e2) {
-                    // only check up to but excluding e1
-                    break;
-                }
-                if (e1.equals(e2)) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (duplicate) {
-                it1.remove();
-            }
-        }
-    }
-
-    public String toSql() {
-        if (disableTableName) {
-            return toSqlWithoutTbl();
-        }
-        return toSqlImpl();
-    }
-
-    public String toSql(boolean disableTableName, boolean needExternalSql, TableType tableType, TableIf table) {
-        return toSqlImpl(disableTableName, needExternalSql, tableType, table);
-    }
-
-    public void disableTableName() {
-        disableTableName = true;
-        for (Expr child : children) {
-            child.disableTableName();
-        }
-    }
-
-    public String toSqlWithoutTbl() {
-        return toSql(true, false, null, null);
-    }
-
-    /**
-     * Returns a SQL string representing this expr. Subclasses should override this method
-     * instead of toSql() to ensure that parenthesis are properly added around the toSql().
-     */
-    protected abstract String toSqlImpl();
-
-    protected abstract String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table);
-
-    public String toExternalSql(TableType tableType, TableIf table) {
-        return toSql(false, true, tableType, table);
-    }
-
-    /**
-     * Return a column label for the expression
-     */
-    public String toColumnLabel() {
-        return toSql();
-    }
-
-    // Convert this expr, including all children, to its Thrift representation.
-    public TExpr treeToThrift() {
-        TExpr result = new TExpr();
-        treeToThriftHelper(result);
-        return result;
-    }
-
-    protected void treeToThriftHelper(TExpr container) {
-        treeToThriftHelper(container, ((expr, exprNode) -> expr.toThrift(exprNode)));
-    }
-
-    // Append a flattened version of this expr, including all children, to 'container'.
-    protected void treeToThriftHelper(TExpr container, ExprVisitor visitor) {
-        TExprNode msg = new TExprNode();
-        msg.type = type.toThrift();
-        msg.num_children = children.size();
-        if (fn != null) {
-            msg.setFn(fn.toThrift(type, collectChildReturnTypes(), collectChildReturnNullables()));
-            if (fn.hasVarArgs()) {
-                msg.setVarargStartIdx(fn.getNumArgs() - 1);
-            }
-        }
-        // useless parameter, just give a number
-        msg.output_scale = -1;
-        msg.setIsNullable(nullableFromNereids.isPresent() ? nullableFromNereids.get() : isNullable());
-        visitor.visit(this, msg);
-        container.addToNodes(msg);
-        for (Expr child : children) {
-            child.treeToThriftHelper(container, visitor);
-        }
-    }
-
-    public interface ExprVisitor {
-        void visit(Expr expr, TExprNode exprNode);
-    }
-
-    // Convert this expr into msg (excluding children), which requires setting
-    // msg.op as well as the expr-specific field.
-    protected abstract void toThrift(TExprNode msg);
+    public abstract <R, C> R accept(ExprVisitor<R, C> visitor, C context);
 
     public String debugString() {
         return debugString(children);
@@ -464,7 +242,7 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
 
     @Override
     public int hashCode() {
-        int result = 31 * Objects.hashCode(type) + Objects.hashCode(opcode);
+        int result = 31 * Objects.hashCode(type) + getClass().hashCode();
         for (Expr child : children) {
             result = 31 * result + Objects.hashCode(child);
         }
@@ -564,10 +342,7 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
      * FunctionCallExpr.isConstant()).
      */
     public final boolean isConstant() {
-        if (isAnalyzed) {
-            return isConstant.get();
-        }
-        return isConstantImpl();
+        return isConstant.get();
     }
 
     /**
@@ -612,131 +387,20 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         return this;
     }
 
-    public boolean isImplicitCast() {
-        return this instanceof CastExpr && ((CastExpr) this).isImplicit();
-    }
-
-    public boolean contains(Expr expr) {
-        if (this.equals(expr)) {
-            return true;
-        }
-
-        for (Expr child : getChildren()) {
-            if (child.contains(expr)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public Expr findEqual(List<Expr> exprs) {
-        if (exprs.isEmpty()) {
-            return null;
-        }
-        for (Expr expr : exprs) {
-            if (contains(expr)) {
-                return expr;
-            }
-        }
-        return null;
-    }
-
     public String getStringValue() {
         return "";
     }
 
     /**
-     * This method is used for constant fold of query in FE,
-     * for different serde dialect(hive, presto, doris).
-     */
-    public String getStringValueForQuery(FormatOptions options) {
-        return getStringValue();
-    }
-
-    /**
-     * This method is to return the string value of this expr in a complex type for query
-     * It is only used for "getStringValueForQuery()"
-     * For most of the integer types, it is same as getStringValueForQuery().
-     * But for others like StringLiteral and DateLiteral, it should be wrapped with quotations.
-     * eg: 1,2,abc,[1,2,3],["abc","def"],{10:20},{"abc":20}
-     */
-    protected String getStringValueInComplexTypeForQuery(FormatOptions options) {
-        return getStringValueForQuery(options);
-    }
-
-    /**
-     * This method is to return the string value of this expr for stream load.
-     * so there is a little different from "getStringValueForQuery()".
-     * eg, for NullLiteral, it should be "\N" for stream load, but "null" for FE constant
-     * for StructLiteral, the value should not contain sub column's name.
-     */
-    public String getStringValueForStreamLoad(FormatOptions options) {
-        return getStringValueForQuery(options);
-    }
-
-    public final TExpr normalize(Normalizer normalizer) {
-        TExpr result = new TExpr();
-        treeToThriftHelper(result, (expr, texprNode) -> expr.normalize(texprNode, normalizer));
-        return result;
-    }
-
-    protected void normalize(TExprNode msg, Normalizer normalizer) {
-        this.toThrift(msg);
-    }
-
-    protected boolean hasNullableChild() {
-        return hasNullableChild(children);
-    }
-
-    protected static boolean hasNullableChild(List<Expr> children) {
-        for (Expr expr : children) {
-            if (expr.isNullable()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
      * For excute expr the result is nullable
-     * TODO: Now only SlotRef and LiteralExpr overwrite the method, each child of Expr should
-     * overwrite this method to plan correct
      */
     public boolean isNullable() {
-        return isNullable(fn, children);
-    }
-
-    public static boolean isNullable(Function fn, List<Expr> children) {
-        if (fn == null) {
-            return true;
-        }
-        switch (fn.getNullableMode()) {
-            case DEPEND_ON_ARGUMENT:
-                return hasNullableChild(children);
-            case ALWAYS_NOT_NULLABLE:
-                return false;
-            case ALWAYS_NULLABLE:
-            default:
-                return true;
-        }
+        return nullable;
     }
 
     public static AggStateType createAggStateType(String name, List<Type> typeList,
             List<Boolean> nullableList, boolean resultNullable) {
         return new AggStateType(name, resultNullable, typeList, nullableList);
-    }
-
-    public static List<Expr> getMockedExprs(List<Type> typeList, List<Boolean> nullableList) {
-        List<Expr> mockedExprs = Lists.newArrayList();
-        for (int i = 0; i < typeList.size(); i++) {
-            mockedExprs.add(new SlotRef(typeList.get(i), nullableList.get(i)));
-        }
-        return mockedExprs;
-    }
-
-    public static List<Expr> getMockedExprs(AggStateType type) {
-        return getMockedExprs(type.getSubTypes(), type.getSubTypeNullables());
     }
 
     // This is only for transactional insert operation,
@@ -755,18 +419,6 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         return this instanceof NullLiteral;
     }
 
-    public void setNullableFromNereids(boolean nullable) {
-        nullableFromNereids = Optional.of(nullable);
-    }
-
-    public Optional<Boolean> getNullableFromNereids() {
-        return nullableFromNereids;
-    }
-
-    public void setOriginCastNullable(boolean nullable) {
-        originCastNullable = Optional.of(nullable);
-    }
-
     public Set<SlotRef> getInputSlotRef() {
         Set<SlotRef> slots = new HashSet<>();
         if (this instanceof SlotRef) {
@@ -780,4 +432,3 @@ public abstract class Expr extends TreeNode<Expr> implements Cloneable {
         return slots;
     }
 }
-

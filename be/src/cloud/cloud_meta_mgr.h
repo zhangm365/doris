@@ -27,8 +27,8 @@
 
 #include "cloud/cloud_tablet.h"
 #include "common/status.h"
-#include "olap/rowset/rowset_fwd.h"
-#include "olap/rowset/rowset_meta.h"
+#include "storage/rowset/rowset_fwd.h"
+#include "storage/rowset/rowset_meta.h"
 #include "util/s3_util.h"
 
 namespace doris {
@@ -83,8 +83,12 @@ public:
 
     Status commit_rowset(RowsetMeta& rs_meta, const std::string& job_id,
                          std::shared_ptr<RowsetMeta>* existed_rs_meta = nullptr);
+    void cache_committed_rowset(RowsetMetaSharedPtr rs_meta, int64_t expiration_time);
 
     Status update_tmp_rowset(const RowsetMeta& rs_meta);
+
+    Status update_packed_file_info(const std::string& packed_file_path,
+                                   const cloud::PackedFileInfoPB& packed_file_info);
 
     Status commit_txn(const StreamLoadContext& ctx, bool is_2pc);
 
@@ -166,9 +170,14 @@ public:
                                    int64_t& max_reserved_snapshots,
                                    int64_t& snapshot_interval_seconds);
 
+    // Get all cluster status for the instance
+    // Returns cluster_id -> (status, mtime_ms)
+    // If my_cluster_id is not null, also returns the requesting node's cluster_id
+    Status get_cluster_status(std::unordered_map<std::string, std::pair<int32_t, int64_t>>* result,
+                              std::string* my_cluster_id = nullptr);
+
 private:
-    bool sync_tablet_delete_bitmap_by_cache(CloudTablet* tablet, int64_t old_max_version,
-                                            std::ranges::range auto&& rs_metas,
+    bool sync_tablet_delete_bitmap_by_cache(CloudTablet* tablet, std::ranges::range auto&& rs_metas,
                                             DeleteBitmap* delete_bitmap);
 
     Status sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_max_version,
@@ -191,9 +200,9 @@ private:
                                                GetDeleteBitmapResponse& res,
                                                int64_t bytes_threadhold);
 
-    void check_table_size_correctness(const RowsetMeta& rs_meta);
-    int64_t get_segment_file_size(const RowsetMeta& rs_meta);
-    int64_t get_inverted_index_file_szie(const RowsetMeta& rs_meta);
+    void check_table_size_correctness(RowsetMeta& rs_meta);
+    int64_t get_segment_file_size(RowsetMeta& rs_meta);
+    int64_t get_inverted_index_file_size(RowsetMeta& rs_meta);
 };
 
 } // namespace cloud

@@ -17,7 +17,7 @@
 
 package org.apache.doris.analysis;
 
-public class ImportWhereStmt extends StatementBase implements NotFallbackInParser {
+public class ImportWhereStmt extends StatementBase {
     private Expr expr;
     // Only used in load processs to define a "preceding filter" expr
     private boolean isPreceding;
@@ -33,10 +33,5 @@ public class ImportWhereStmt extends StatementBase implements NotFallbackInParse
 
     public boolean isPreceding() {
         return isPreceding;
-    }
-
-    @Override
-    public RedirectStatus getRedirectStatus() {
-        return null;
     }
 }

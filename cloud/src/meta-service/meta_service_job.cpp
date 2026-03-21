@@ -37,6 +37,7 @@
 #include "meta-service/meta_service.h"
 #include "meta-service/meta_service_helper.h"
 #include "meta-service/meta_service_tablet_stats.h"
+#include "meta-store/blob_message.h"
 #include "meta-store/clone_chain_reader.h"
 #include "meta-store/document_message.h"
 #include "meta-store/keys.h"
@@ -1108,6 +1109,11 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         RecycleRowsetPB recycle_rowset;
         recycle_rowset.set_creation_time(now);
         recycle_rowset.mutable_rowset_meta()->CopyFrom(rs);
+        if (config::enable_recycle_rowset_strip_key_bounds) {
+            // Strip key bounds to shrink operation log for ts compaction recycle entries
+            recycle_rowset.mutable_rowset_meta()->clear_segments_key_bounds();
+            recycle_rowset.mutable_rowset_meta()->clear_segments_key_bounds_truncated();
+        }
         recycle_rowset.set_type(RecycleRowsetPB::COMPACT);
 
         if (is_versioned_write) {
@@ -1115,10 +1121,9 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         } else {
             auto recycle_val = recycle_rowset.SerializeAsString();
             txn->put(recycle_key, recycle_val);
+            INSTANCE_LOG(INFO) << "put recycle rowset, tablet_id=" << tablet_id
+                               << " key=" << hex(recycle_key);
         }
-
-        INSTANCE_LOG(INFO) << "put recycle rowset, tablet_id=" << tablet_id
-                           << " key=" << hex(recycle_key);
     };
     if (!is_versioned_read) {
         std::tie(code, msg) =
@@ -1215,6 +1220,14 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         return;
     }
 
+    if (rs_meta.has_is_recycled() && rs_meta.is_recycled()) {
+        SS << "rowset has already been marked as recycled, tablet_id=" << tablet_id
+           << " txn_id=" << rs_meta.txn_id() << " rowset_id=" << rs_meta.rowset_id_v2();
+        msg = ss.str();
+        code = MetaServiceCode::TXN_ALREADY_ABORTED;
+        return;
+    }
+
     txn->remove(tmp_rowset_key);
     INSTANCE_LOG(INFO) << "remove tmp rowset meta, tablet_id=" << tablet_id
                        << " tmp_rowset_key=" << hex(tmp_rowset_key);
@@ -1272,29 +1285,19 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     need_commit = true;
 
     if (!compaction_log.recycle_rowsets().empty() && is_versioned_write) {
+        size_t num_recycled_rowsets = compaction_log.recycle_rowsets().size();
         std::string operation_log_key = versioned::log_key({instance_id});
-        std::string operation_log_value;
         OperationLogPB operation_log;
         if (is_versioned_read) {
             operation_log.set_min_timestamp(meta_reader.min_read_version());
         }
         operation_log.mutable_compaction()->Swap(&compaction_log);
-        if (!operation_log.SerializeToString(&operation_log_value)) {
-            code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
-            msg = fmt::format("failed to serialize OperationLogPB: {}", hex(operation_log_key));
-            LOG_WARNING(msg)
-                    .tag("instance_id", instance_id)
-                    .tag("table_id", request->job().idx().table_id());
-            return;
-        }
-        // Put versioned operation log for compaction to track recycling
-        LOG_INFO("put versioned operation log key")
+        versioned::blob_put(txn.get(), operation_log_key, operation_log);
+        LOG_INFO("put compaction operation log key")
                 .tag("instance_id", instance_id)
                 .tag("operation_log_key", hex(operation_log_key))
                 .tag("tablet_id", tablet_id)
-                .tag("value_size", operation_log_value.size())
-                .tag("recycle_rowsets_count", compaction_log.recycle_rowsets().size());
-        versioned_put(txn.get(), operation_log_key, operation_log_value);
+                .tag("recycle_rowsets_count", num_recycled_rowsets);
     }
 }
 
@@ -1666,6 +1669,11 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
         RecycleRowsetPB recycle_rowset;
         recycle_rowset.set_creation_time(now);
         recycle_rowset.mutable_rowset_meta()->CopyFrom(rs);
+        if (config::enable_recycle_rowset_strip_key_bounds) {
+            // Strip key bounds to shrink schema change recycle operation log entries
+            recycle_rowset.mutable_rowset_meta()->clear_segments_key_bounds();
+            recycle_rowset.mutable_rowset_meta()->clear_segments_key_bounds_truncated();
+        }
         recycle_rowset.set_type(RecycleRowsetPB::DROP);
         if (is_versioned_write) {
             schema_change_log.add_recycle_rowsets()->Swap(&recycle_rowset);
@@ -1804,6 +1812,16 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
             msg = ss.str();
             return;
         }
+
+        if (tmp_rowset_meta.has_is_recycled() && tmp_rowset_meta.is_recycled()) {
+            SS << "rowset has already been marked as recycled, tablet_id=" << new_tablet_id
+               << " txn_id=" << tmp_rowset_meta.txn_id()
+               << " rowset_id=" << tmp_rowset_meta.rowset_id_v2();
+            msg = ss.str();
+            code = MetaServiceCode::TXN_ALREADY_ABORTED;
+            return;
+        }
+
         using namespace std::chrono;
         auto rowset_visible_time =
                 duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -1881,60 +1899,31 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
 
     if (is_versioned_write) {
         std::string operation_log_key = versioned::log_key({instance_id});
-        std::string operation_log_value;
         OperationLogPB operation_log;
         if (is_versioned_read) {
             operation_log.set_min_timestamp(reader.min_read_version());
         }
         operation_log.mutable_schema_change()->Swap(&schema_change_log);
-        if (!operation_log.SerializeToString(&operation_log_value)) {
-            code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
-            msg = fmt::format("failed to serialize OperationLogPB: {}", hex(operation_log_key));
-            LOG_WARNING(msg)
-                    .tag("instance_id", instance_id)
-                    .tag("table_id", request->job().idx().table_id());
-            return;
-        }
-        // Put versioned operation log for compaction to track recycling
-        LOG_INFO("put versioned operation log key")
+        versioned::blob_put(txn.get(), operation_log_key, operation_log);
+        LOG_INFO("put schema change operation log key")
                 .tag("instance_id", instance_id)
                 .tag("operation_log_key", hex(operation_log_key))
                 .tag("tablet_id", tablet_id)
                 .tag("new_tablet_id", new_tablet_id)
-                .tag("value_size", operation_log_value.size())
                 .tag("recycle_rowsets_count", schema_change_log.recycle_rowsets().size());
-        versioned_put(txn.get(), operation_log_key, operation_log_value);
     }
 }
 
-void MetaServiceImpl::finish_tablet_job(::google::protobuf::RpcController* controller,
-                                        const FinishTabletJobRequest* request,
-                                        FinishTabletJobResponse* response,
-                                        ::google::protobuf::Closure* done) {
-    RPC_PREPROCESS(finish_tablet_job, get, put, del);
-    std::string cloud_unique_id = request->cloud_unique_id();
-    instance_id = get_instance_id(resource_mgr_, cloud_unique_id);
-    if (instance_id.empty()) {
-        code = MetaServiceCode::INVALID_ARGUMENT;
-        SS << "cannot find instance_id with cloud_unique_id="
-           << (cloud_unique_id.empty() ? "(empty)" : cloud_unique_id);
-        msg = ss.str();
-        LOG(INFO) << msg;
-        return;
-    }
-    RPC_RATE_LIMIT(finish_tablet_job)
-    if (!request->has_job() ||
-        (request->job().compaction().empty() && !request->job().has_schema_change())) {
-        code = MetaServiceCode::INVALID_ARGUMENT;
-        msg = "no valid job specified";
-        return;
-    }
-
-    bool is_versioned_read = is_version_read_enabled(instance_id);
-    bool is_versioned_write = is_version_write_enabled(instance_id);
+void _finish_tablet_job(const FinishTabletJobRequest* request, FinishTabletJobResponse* response,
+                        std::string& instance_id, std::unique_ptr<Transaction>& txn, TxnKv* txn_kv,
+                        DeleteBitmapLockWhiteList* delete_bitmap_lock_white_list,
+                        ResourceManager* resource_mgr, MetaServiceCode& code, std::string& msg,
+                        std::stringstream& ss) {
+    bool is_versioned_read = resource_mgr->is_version_read_enabled(instance_id);
+    bool is_versioned_write = resource_mgr->is_version_write_enabled(instance_id);
     for (int retry = 0; retry <= 1; retry++) {
         bool need_commit = false;
-        TxnErrorCode err = txn_kv_->create_txn(&txn);
+        TxnErrorCode err = txn_kv->create_txn(&txn);
         if (err != TxnErrorCode::TXN_OK) {
             code = cast_as<ErrCategory::CREATE>(err);
             msg = "failed to create txn";
@@ -1954,7 +1943,7 @@ void MetaServiceImpl::finish_tablet_job(::google::protobuf::RpcController* contr
                 get_tablet_idx(code, msg, txn.get(), instance_id, tablet_id, tablet_idx);
                 if (code != MetaServiceCode::OK) return;
             } else {
-                CloneChainReader reader(instance_id, resource_mgr_.get());
+                CloneChainReader reader(instance_id, resource_mgr);
                 err = reader.get_tablet_index(txn.get(), tablet_id, &tablet_idx);
                 if (err != TxnErrorCode::TXN_OK) {
                     code = err == TxnErrorCode::TXN_KEY_NOT_FOUND
@@ -1998,20 +1987,19 @@ void MetaServiceImpl::finish_tablet_job(::google::protobuf::RpcController* contr
         FinishTabletJobRequest_Action action = request->action();
 
         std::string use_version =
-                delete_bitmap_lock_white_list_->get_delete_bitmap_lock_version(instance_id);
+                delete_bitmap_lock_white_list->get_delete_bitmap_lock_version(instance_id);
         LOG(INFO) << "finish_tablet_job instance_id=" << instance_id
                   << " use_version=" << use_version;
         if (!request->job().compaction().empty()) {
             // Process compaction commit
             process_compaction_job(code, msg, ss, txn, request, response, recorded_job, instance_id,
                                    job_key, need_commit, use_version, is_versioned_read,
-                                   is_versioned_write, txn_kv_.get(), resource_mgr_.get());
+                                   is_versioned_write, txn_kv, resource_mgr);
         } else if (request->job().has_schema_change()) {
             // Process schema change commit
             process_schema_change_job(code, msg, ss, txn, request, response, recorded_job,
                                       instance_id, job_key, need_commit, use_version,
-                                      is_versioned_read, is_versioned_write, txn_kv_.get(),
-                                      resource_mgr_.get());
+                                      is_versioned_read, is_versioned_write, txn_kv, resource_mgr);
         }
 
         if (!need_commit) return;
@@ -2046,6 +2034,32 @@ void MetaServiceImpl::finish_tablet_job(::google::protobuf::RpcController* contr
         }
         break;
     }
+}
+
+void MetaServiceImpl::finish_tablet_job(::google::protobuf::RpcController* controller,
+                                        const FinishTabletJobRequest* request,
+                                        FinishTabletJobResponse* response,
+                                        ::google::protobuf::Closure* done) {
+    RPC_PREPROCESS(finish_tablet_job, get, put, del);
+    std::string cloud_unique_id = request->cloud_unique_id();
+    instance_id = get_instance_id(resource_mgr_, cloud_unique_id);
+    if (instance_id.empty()) {
+        code = MetaServiceCode::INVALID_ARGUMENT;
+        SS << "cannot find instance_id with cloud_unique_id="
+           << (cloud_unique_id.empty() ? "(empty)" : cloud_unique_id);
+        msg = ss.str();
+        LOG(INFO) << msg;
+        return;
+    }
+    RPC_RATE_LIMIT(finish_tablet_job)
+    if (!request->has_job() ||
+        (request->job().compaction().empty() && !request->job().has_schema_change())) {
+        code = MetaServiceCode::INVALID_ARGUMENT;
+        msg = "no valid job specified";
+        return;
+    }
+    _finish_tablet_job(request, response, instance_id, txn, txn_kv_.get(),
+                       delete_bitmap_lock_white_list_.get(), resource_mgr_.get(), code, msg, ss);
 }
 
 #undef SS

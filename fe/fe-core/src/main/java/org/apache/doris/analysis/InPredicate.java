@@ -22,15 +22,9 @@ package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.Function;
 import org.apache.doris.catalog.Function.NullableMode;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
+import org.apache.doris.catalog.FunctionName;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TExprOpcode;
-import org.apache.doris.thrift.TInPredicate;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.gson.annotations.SerializedName;
 
@@ -47,38 +41,44 @@ public class InPredicate extends Predicate {
     private static final String NOT_IN_ITERATE = "not_in_iterate";
     @SerializedName("ini")
     private boolean isNotIn;
+    @SerializedName("ac")
+    private boolean allConstant;
 
     private InPredicate() {
         // use for serde only
+        this.allConstant = false;
     }
 
-    // First child is the comparison expr for which we
-    // should check membership in the inList (the remaining children).
+    /** First child is the comparison expr for which we
+     * should check membership in the inList (the remaining children).
+     * NOTICE: only used in test
+     */
     public InPredicate(Expr compareExpr, List<Expr> inList, boolean isNotIn) {
         children.add(compareExpr);
         children.addAll(inList);
         this.isNotIn = isNotIn;
+        this.allConstant = false;
     }
 
     /**
      * use for Nereids ONLY
      */
-    public InPredicate(Expr compareExpr, List<Expr> inList, boolean isNotIn, boolean allConstant) {
+    public InPredicate(Expr compareExpr, List<Expr> inList, boolean isNotIn, boolean allConstant, boolean nullable) {
         this(compareExpr, inList, isNotIn);
+        this.allConstant = allConstant;
         type = Type.BOOLEAN;
-        if (allConstant) {
-            opcode = isNotIn ? TExprOpcode.FILTER_NOT_IN : TExprOpcode.FILTER_IN;
-        } else {
-            opcode = isNotIn ? TExprOpcode.FILTER_NEW_NOT_IN : TExprOpcode.FILTER_NEW_IN;
+        if (!allConstant) {
             fn = new Function(new FunctionName(isNotIn ? NOT_IN_ITERATE : IN_ITERATE),
                     Lists.newArrayList(getChild(0).getType(), getChild(1).getType()), Type.BOOLEAN,
                     true, true, NullableMode.DEPEND_ON_ARGUMENT);
         }
+        this.nullable = nullable;
     }
 
     protected InPredicate(InPredicate other) {
         super(other);
         isNotIn = other.isNotIn();
+        allConstant = other.allConstant;
     }
 
     public int getInElementNum() {
@@ -91,21 +91,16 @@ public class InPredicate extends Predicate {
         return new InPredicate(this);
     }
 
-    // C'tor for initializing an [NOT] IN predicate with a subquery child.
-    public InPredicate(Expr compareExpr, Expr subquery, boolean isNotIn) {
-        Preconditions.checkNotNull(compareExpr);
-        Preconditions.checkNotNull(subquery);
-        children.add(compareExpr);
-        children.add(subquery);
-        this.isNotIn = isNotIn;
-    }
-
     public List<Expr> getListChildren() {
         return children.subList(1, children.size());
     }
 
     public boolean isNotIn() {
         return isNotIn;
+    }
+
+    public boolean getAllConstant() {
+        return allConstant;
     }
 
     public boolean isLiteralChildren() {
@@ -118,43 +113,22 @@ public class InPredicate extends Predicate {
     }
 
     @Override
-    protected void toThrift(TExprNode msg) {
-        msg.in_predicate = new TInPredicate(isNotIn);
-        msg.node_type = TExprNodeType.IN_PRED;
-        msg.setOpcode(opcode);
-    }
-
-    @Override
-    public String toSqlImpl() {
-        StringBuilder strBuilder = new StringBuilder();
-        String notStr = (isNotIn) ? "NOT " : "";
-        strBuilder.append(getChild(0).toSql() + " " + notStr + "IN (");
-        for (int i = 1; i < children.size(); ++i) {
-            strBuilder.append(getChild(i).toSql());
-            strBuilder.append((i + 1 != children.size()) ? ", " : "");
-        }
-        strBuilder.append(")");
-        return strBuilder.toString();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        StringBuilder strBuilder = new StringBuilder();
-        String notStr = (isNotIn) ? "NOT " : "";
-        strBuilder.append(
-                getChild(0).toSql(disableTableName, needExternalSql, tableType, table) + " " + notStr + "IN (");
-        for (int i = 1; i < children.size(); ++i) {
-            strBuilder.append(getChild(i).toSql(disableTableName, needExternalSql, tableType, table));
-            strBuilder.append((i + 1 != children.size()) ? ", " : "");
-        }
-        strBuilder.append(")");
-        return strBuilder.toString();
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitInPredicate(this, context);
     }
 
     @Override
     public String toString() {
-        return toSql();
+        StringBuilder strBuilder = new StringBuilder();
+        String notStr = isNotIn ? "NOT " : "";
+        strBuilder.append(getChild(0).accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE))
+                .append(" ").append(notStr).append("IN (");
+        for (int i = 1; i < getChildren().size(); ++i) {
+            strBuilder.append(getChild(i).accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
+            strBuilder.append((i + 1 != getChildren().size()) ? ", " : "");
+        }
+        strBuilder.append(")");
+        return strBuilder.toString();
     }
 
     @Override
@@ -166,10 +140,5 @@ public class InPredicate extends Predicate {
             }
         }
         return false;
-    }
-
-    @Override
-    public boolean isNullable() {
-        return hasNullableChild();
     }
 }

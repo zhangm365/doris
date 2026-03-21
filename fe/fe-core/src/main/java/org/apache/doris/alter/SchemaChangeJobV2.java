@@ -52,6 +52,7 @@ import org.apache.doris.common.util.DbUtil;
 import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.nereids.rules.expression.check.CheckCast;
+import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.persist.gson.GsonPostProcessable;
 import org.apache.doris.persist.gson.GsonUtils;
@@ -77,7 +78,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Table;
 import com.google.common.collect.Table.Cell;
 import com.google.gson.annotations.SerializedName;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -148,6 +149,8 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
     protected boolean storeRowColumn = false;
     @SerializedName(value = "hasRowStoreChange")
     protected boolean hasRowStoreChange = false;
+    @SerializedName(value = "columnSeqMapping")
+    protected Map<String, List<String>> columnSeqMapping = Maps.newHashMap();
 
     // save all schema change tasks
     AgentBatchTask schemaChangeBatchTask = new AgentBatchTask();
@@ -211,6 +214,10 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
         this.storageFormat = storageFormat;
     }
 
+    public void setColumnSeqMapping(Map<String, List<String>> columnSeqMapping) {
+        this.columnSeqMapping = columnSeqMapping;
+    }
+
     /**
      * clear some date structure in this job to save memory
      * these data structures must not used in getInfo method
@@ -224,10 +231,10 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
     }
 
     protected boolean isShadowIndexOfBase(long shadowIdxId, OlapTable tbl) {
-        if (indexIdToName.get(shadowIdxId).startsWith(SchemaChangeHandler.SHADOW_NAME_PREFIX)) {
+        if (indexIdToName.get(shadowIdxId).startsWith(Column.SHADOW_NAME_PREFIX)) {
             String shadowIndexName = indexIdToName.get(shadowIdxId);
             String indexName = shadowIndexName
-                    .substring(SchemaChangeHandler.SHADOW_NAME_PREFIX.length());
+                    .substring(Column.SHADOW_NAME_PREFIX.length());
             long indexId = tbl.getIndexIdByName(indexName);
             LOG.info("shadow index id: {}, shadow index name: {}, pointer to index id: {}, index name: {}, "
                             + "base index id: {}, table_id: {}", shadowIdxId, shadowIndexName, indexId, indexName,
@@ -327,7 +334,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
                                     tbl.rowStorePageSize(),
                                     tbl.variantEnableFlattenNested(),
                                     tbl.storagePageSize(), tbl.getTDEAlgorithm(),
-                                    tbl.storageDictPageSize());
+                                    tbl.storageDictPageSize(),
+                                    columnSeqMapping,
+                                    tbl.getVerticalCompactionNumColumnsPerGroup());
 
                             createReplicaTask.setBaseTablet(partitionIndexTabletMap.get(partitionId, shadowIdxId)
                                     .get(shadowTabletId), originSchemaHash);
@@ -441,15 +450,17 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
                 partition.createRollupIndex(shadowIndex);
             }
         }
-
         for (long shadowIdxId : indexIdMap.keySet()) {
             MaterializedIndexMeta originalIndexMeta = tbl.getIndexMetaByIndexId(indexIdMap.get(shadowIdxId));
+            // it's ok to not use originalIndexMeta's sessionVariables,
+            // because the sync mv MaterializedIndexMeta cannot be schema changed
+            // (e.g. alter sync_mv modify sync_mv_column is not allowed)
             tbl.setIndexMeta(shadowIdxId, indexIdToName.get(shadowIdxId), indexSchemaMap.get(shadowIdxId),
                     indexSchemaVersionAndHashMap.get(shadowIdxId).schemaVersion,
                     indexSchemaVersionAndHashMap.get(shadowIdxId).schemaHash,
                     indexShortKeyMap.get(shadowIdxId), TStorageType.COLUMN,
                     tbl.getKeysTypeByIndexId(indexIdMap.get(shadowIdxId)), originalIndexMeta.getDefineStmt(),
-                    indexChange ? indexes : originalIndexMeta.getIndexes());
+                    indexChange ? indexes : originalIndexMeta.getIndexes(), null);
             MaterializedIndexMeta shadowIndexMeta = tbl.getIndexMetaByIndexId(shadowIdxId);
             shadowIndexMeta.setWhereClause(originalIndexMeta.getWhereClause());
         }
@@ -529,9 +540,9 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
                         destSlotDesc.setColumn(column);
                         destSlotDesc.setIsNullable(column.isAllowNull());
 
-                        if (indexColumnMap.containsKey(SchemaChangeHandler.SHADOW_NAME_PREFIX + column.getName())) {
+                        if (indexColumnMap.containsKey(Column.SHADOW_NAME_PREFIX + column.getName())) {
                             Column newColumn = indexColumnMap.get(
-                                    SchemaChangeHandler.SHADOW_NAME_PREFIX + column.getName());
+                                    Column.SHADOW_NAME_PREFIX + column.getName());
                             if (!Objects.equals(newColumn.getType(), column.getType())) {
                                 DataType srcType = DataType.fromCatalogType(column.getType());
                                 DataType destType = DataType.fromCatalogType(newColumn.getType());
@@ -541,7 +552,12 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
                                 Expr defineExpr = slot;
                                 if (!(srcType.isDecimalV2Type() && destType.isDecimalV2Type()
                                         || srcType.isStringLikeType() && destType.isStringLikeType())) {
-                                    defineExpr = new CastExpr(newColumn.getType(), defineExpr, null);
+                                    boolean nullable = Cast.castNullable(
+                                            destSlotDesc.getIsNullable(),
+                                            DataType.fromCatalogType(destSlotDesc.getType()),
+                                            DataType.fromCatalogType(newColumn.getType())
+                                    );
+                                    defineExpr = new CastExpr(newColumn.getType(), defineExpr, nullable);
                                 }
                                 defineExprs.put(column.getName(), defineExpr);
                             }
@@ -560,7 +576,7 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
                                     tableId, partitionId, shadowIdxId, originIdxId, shadowTabletId, originTabletId,
                                     shadowReplica.getId(), shadowSchemaHash, originSchemaHash, visibleVersion, jobId,
                                     JobType.SCHEMA_CHANGE, defineExprs, descTable, originSchemaColumns, objectPool,
-                                    null, expiration, vaultId);
+                                    null, expiration, vaultId, queryOptions, queryGlobals);
                             schemaChangeBatchTask.addTask(rollupTask);
                         }
                     }
@@ -816,6 +832,7 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
         if (storageFormat == TStorageFormat.V2) {
             tbl.setStorageFormat(storageFormat);
         }
+        tbl.setColumnSeqMapping(columnSeqMapping);
     }
 
     /*
@@ -1038,7 +1055,7 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
             info.add(TimeUtils.longToTimeStringWithms(createTimeMs));
             info.add(TimeUtils.longToTimeStringWithms(finishedTimeMs));
             // only show the origin index name
-            info.add(indexIdToName.get(shadowIndexId).substring(SchemaChangeHandler.SHADOW_NAME_PREFIX.length()));
+            info.add(indexIdToName.get(shadowIndexId).substring(Column.SHADOW_NAME_PREFIX.length()));
             info.add(shadowIndexId);
             info.add(entry.getValue());
             info.add(indexSchemaVersionAndHashMap.get(shadowIndexId).toString());

@@ -44,9 +44,9 @@
 #include <string>
 
 #include "common/status.h"
-#include "jsonb_document.h"
-#include "jsonb_stream.h"
-#include "vec/core/types.h"
+#include "core/types.h"
+#include "util/jsonb_document.h"
+#include "util/jsonb_stream.h"
 
 namespace doris {
 
@@ -328,11 +328,11 @@ public:
                 return false;
             }
 
-            if constexpr (std::same_as<T, vectorized::Decimal256>) {
+            if constexpr (std::same_as<T, Decimal256>) {
                 os_->put((JsonbTypeUnder)JsonbType::T_Decimal256);
-            } else if constexpr (std::same_as<T, vectorized::Decimal128V3>) {
+            } else if constexpr (std::same_as<T, Decimal128V3>) {
                 os_->put((JsonbTypeUnder)JsonbType::T_Decimal128);
-            } else if constexpr (std::same_as<T, vectorized::Decimal64>) {
+            } else if constexpr (std::same_as<T, Decimal64>) {
                 os_->put((JsonbTypeUnder)JsonbType::T_Decimal64);
             } else {
                 os_->put((JsonbTypeUnder)JsonbType::T_Decimal32);
@@ -550,16 +550,19 @@ public:
     }
 
     OS_TYPE* getOutput() { return os_; }
-    JsonbDocument* getDocument() {
-        JsonbDocument* doc = nullptr;
+
+#ifdef BE_TEST
+    const JsonbDocument* getDocument() {
+        const JsonbDocument* doc = nullptr;
         THROW_IF_ERROR(JsonbDocument::checkAndCreateDocument(getOutput()->getBuffer(),
                                                              getOutput()->getSize(), &doc));
         return doc;
     }
 
-    JsonbValue* getValue() {
+    const JsonbValue* getValue() {
         return JsonbDocument::createValue(getOutput()->getBuffer(), getOutput()->getSize());
     }
+#endif
 
     bool writeEnd() {
         while (!stack_.empty()) {

@@ -15,25 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "mock_agg_fn_evaluator.h"
+#include "testutil/mock/mock_agg_fn_evaluator.h"
 
 #include <gtest/gtest.h>
 
 #include "agent/be_exec_version_manager.h"
 #include "common/object_pool.h"
-#include "mock_slot_ref.h"
-#include "vec/aggregate_functions/aggregate_function_simple_factory.h"
-#include "vec/data_types/data_type_number.h"
-#include "vec/exprs/vectorized_agg_fn.h"
-#include "vec/exprs/vexpr_context.h"
-namespace doris::vectorized {
+#include "core/data_type/data_type_number.h"
+#include "exprs/aggregate/aggregate_function_simple_factory.h"
+#include "exprs/vectorized_agg_fn.h"
+#include "exprs/vexpr_context.h"
+#include "testutil/mock/mock_slot_ref.h"
+namespace doris {
 
 AggFnEvaluator* create_mock_agg_fn_evaluator(ObjectPool& pool, bool is_merge, bool without_key) {
     auto* mock_agg_fn_evaluator = pool.add(new MockAggFnEvaluator(is_merge, without_key));
     mock_agg_fn_evaluator->_function = AggregateFunctionSimpleFactory::instance().get(
-            "sum", {std::make_shared<DataTypeInt64>()}, false,
-            BeExecVersionManager::get_newest_version(),
-            {.enable_decimal256 = false, .column_names = {}});
+            "sum", {std::make_shared<DataTypeInt64>()}, std::make_shared<DataTypeInt64>(), false,
+            BeExecVersionManager::get_newest_version(), {.column_names = {}});
     EXPECT_TRUE(mock_agg_fn_evaluator->_function != nullptr);
     mock_agg_fn_evaluator->_input_exprs_ctxs =
             MockSlotRef::create_mock_contexts(mock_agg_fn_evaluator->_function->get_return_type());
@@ -44,24 +43,22 @@ AggFnEvaluator* create_mock_agg_fn_evaluator(ObjectPool& pool, VExprContextSPtrs
                                              bool is_merge, bool without_key) {
     auto* mock_agg_fn_evaluator = pool.add(new MockAggFnEvaluator(is_merge, without_key));
     mock_agg_fn_evaluator->_function = AggregateFunctionSimpleFactory::instance().get(
-            "sum", {std::make_shared<DataTypeInt64>()}, false,
-            BeExecVersionManager::get_newest_version(),
-            {.enable_decimal256 = false, .column_names = {}});
+            "sum", {std::make_shared<DataTypeInt64>()}, std::make_shared<DataTypeInt64>(), false,
+            BeExecVersionManager::get_newest_version(), {.column_names = {}});
     EXPECT_TRUE(mock_agg_fn_evaluator->_function != nullptr);
     mock_agg_fn_evaluator->_input_exprs_ctxs = input_exprs_ctxs;
     return mock_agg_fn_evaluator;
 }
 
 AggFnEvaluator* create_agg_fn(ObjectPool& pool, const std::string& agg_fn_name,
-                              const DataTypes& args_types, bool result_nullable,
-                              bool is_window_function) {
+                              const DataTypes& args_types, DataTypePtr result_type,
+                              bool result_nullable, bool is_window_function) {
     auto* mock_agg_fn_evaluator =
             pool.add(new MockAggFnEvaluator(false, false, is_window_function)); // just falg;
     mock_agg_fn_evaluator->_function = AggregateFunctionSimpleFactory::instance().get(
-            agg_fn_name, args_types, result_nullable, BeExecVersionManager::get_newest_version(),
-            {.enable_decimal256 = false,
-             .is_window_function = is_window_function,
-             .column_names = {}});
+            agg_fn_name, args_types, result_type, result_nullable,
+            BeExecVersionManager::get_newest_version(),
+            {.is_window_function = is_window_function, .column_names = {}});
     EXPECT_TRUE(mock_agg_fn_evaluator->_function != nullptr);
     for (int i = 0; i < args_types.size(); i++) {
         mock_agg_fn_evaluator->_input_exprs_ctxs.push_back(
@@ -71,4 +68,4 @@ AggFnEvaluator* create_agg_fn(ObjectPool& pool, const std::string& agg_fn_name,
     return mock_agg_fn_evaluator;
 }
 
-} // namespace doris::vectorized
+} // namespace doris

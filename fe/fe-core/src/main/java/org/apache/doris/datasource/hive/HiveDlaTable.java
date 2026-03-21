@@ -30,7 +30,7 @@ import org.apache.doris.mtmv.MTMVSnapshotIf;
 import org.apache.doris.mtmv.MTMVTimestampSnapshot;
 
 import com.google.common.collect.Lists;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 
 import java.util.Collections;
 import java.util.List;
@@ -71,11 +71,10 @@ public class HiveDlaTable extends HMSDlaTable {
     @Override
     public MTMVSnapshotIf getPartitionSnapshot(String partitionName, MTMVRefreshContext context,
             Optional<MvccSnapshot> snapshot) throws AnalysisException {
-        HiveMetaStoreCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
-                .getMetaStoreCache((HMSExternalCatalog) hmsTable.getCatalog());
-        HiveMetaStoreCache.HivePartitionValues hivePartitionValues = cache.getPartitionValues(
-                hmsTable, hmsTable.getPartitionColumnTypes(snapshot));
+        HiveExternalMetaCache.HivePartitionValues hivePartitionValues = hmsTable.getHivePartitionValues(snapshot);
         Long partitionId = getPartitionIdByNameOrAnalysisException(partitionName, hivePartitionValues);
+        HiveExternalMetaCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
+                .hive(hmsTable.getCatalog().getId());
         HivePartition hivePartition = getHivePartitionByIdOrAnalysisException(partitionId,
                 hivePartitionValues, cache);
         return new MTMVTimestampSnapshot(hivePartition.getLastModifiedTime());
@@ -95,10 +94,9 @@ public class HiveDlaTable extends HMSDlaTable {
         HivePartition maxPartition = null;
         long maxVersionTime = 0L;
         long visibleVersionTime;
-        HiveMetaStoreCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
-                .getMetaStoreCache((HMSExternalCatalog) hmsTable.getCatalog());
-        HiveMetaStoreCache.HivePartitionValues hivePartitionValues = cache.getPartitionValues(
-                hmsTable, hmsTable.getPartitionColumnTypes(snapshot));
+        HiveExternalMetaCache.HivePartitionValues hivePartitionValues = hmsTable.getHivePartitionValues(snapshot);
+        HiveExternalMetaCache cache = Env.getCurrentEnv().getExtMetaCacheMgr()
+                .hive(hmsTable.getCatalog().getId());
         List<HivePartition> partitionList = cache.getAllPartitionsWithCache(hmsTable,
                 Lists.newArrayList(hivePartitionValues.getPartitionValuesMap().values()));
         if (CollectionUtils.isEmpty(partitionList)) {
@@ -116,7 +114,7 @@ public class HiveDlaTable extends HMSDlaTable {
     }
 
     private Long getPartitionIdByNameOrAnalysisException(String partitionName,
-            HiveMetaStoreCache.HivePartitionValues hivePartitionValues)
+            HiveExternalMetaCache.HivePartitionValues hivePartitionValues)
             throws AnalysisException {
         Long partitionId = hivePartitionValues.getPartitionNameToIdMap().get(partitionName);
         if (partitionId == null) {
@@ -126,8 +124,8 @@ public class HiveDlaTable extends HMSDlaTable {
     }
 
     private HivePartition getHivePartitionByIdOrAnalysisException(Long partitionId,
-            HiveMetaStoreCache.HivePartitionValues hivePartitionValues,
-            HiveMetaStoreCache cache) throws AnalysisException {
+            HiveExternalMetaCache.HivePartitionValues hivePartitionValues,
+            HiveExternalMetaCache cache) throws AnalysisException {
         List<String> partitionValues = hivePartitionValues.getPartitionValuesMap().get(partitionId);
         if (CollectionUtils.isEmpty(partitionValues)) {
             throw new AnalysisException("can not find partitionValues: " + partitionId);

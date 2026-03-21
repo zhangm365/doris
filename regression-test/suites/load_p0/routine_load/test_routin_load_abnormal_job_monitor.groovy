@@ -132,8 +132,8 @@ suite("test_routine_load_abnormal_job_monitor","p0") {
                 INDEX idx_ngrambf_k116 (`k16`) USING NGRAM_BF PROPERTIES("gram_size"="3", "bf_size"="256"),
                 INDEX idx_ngrambf_k117 (`k17`) USING NGRAM_BF PROPERTIES("gram_size"="3", "bf_size"="256"),
 
-                INDEX idx_bitmap_k104 (`k02`) USING BITMAP,
-                INDEX idx_bitmap_k110 (`kd01`) USING BITMAP
+                INDEX idx_bitmap_k104 (`k02`) USING INVERTED,
+                INDEX idx_bitmap_k110 (`kd01`) USING INVERTED
                 
             )
             DUPLICATE KEY(k00)
@@ -201,7 +201,12 @@ suite("test_routine_load_abnormal_job_monitor","p0") {
                         def jsonSlurper = new JsonSlurper()
                         def result = jsonSlurper.parseText(body)
 
-                        def entry = result.find { it.tags?.metric == "doris_fe_job" && it.tags?.state == "ABNORMAL_PAUSED"}
+                        def entry = result.find {
+                            it.tags?.metric == "doris_fe_job" &&
+                            it.tags?.job == "load" &&
+                            it.tags?.type == "ROUTINE_LOAD" &&
+                            it.tags?.state == "ABNORMAL_PAUSED"
+                        }
                         def value = entry ? entry.value : null
                         log.info("Contains ABNORMAL_PAUSE: ${entry != null}".toString())
                         log.info("Value of ABNORMAL_PAUSE: ${value}".toString())
@@ -209,7 +214,13 @@ suite("test_routine_load_abnormal_job_monitor","p0") {
                             metricCount++
                         }
 
-                        entry = result.find { it.tags?.metric == "doris_fe_job" && it.tags?.state == "USER_PAUSED"}
+                        entry = result.find {
+                            it.tags?.metric == "doris_fe_job" &&
+                            it.tags?.job == "load" &&
+                            it.tags?.type == "ROUTINE_LOAD" &&
+                            it.tags?.state == "USER_PAUSED"
+                        }
+
                         value = entry ? entry.value : null
                         log.info("Contains USER_PAUSE: ${entry != null}".toString())
                         log.info("Value of USER_PAUSE: ${value}".toString())

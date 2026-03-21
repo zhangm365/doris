@@ -31,7 +31,6 @@ import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.statistics.ResultRow;
 
-import com.google.common.base.CaseFormat;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableList.Builder;
@@ -441,19 +440,6 @@ public class Utils {
     }
 
     /**
-     * Normalize the name to lower underscore style, return default name if the name is empty.
-     */
-    public static String normalizeName(String name, String defaultName) {
-        if (StringUtils.isEmpty(name)) {
-            return defaultName;
-        }
-        if (name.contains("$")) {
-            name = name.replace("$", "_");
-        }
-        return CaseFormat.UPPER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, name);
-    }
-
-    /**
      * Check the content if contains chinese or not, if true when contains chinese or false
      */
     public static boolean containChinese(String text) {
@@ -463,6 +449,19 @@ public class Utils {
             }
         }
         return false;
+    }
+
+    /**
+     * provide a method for generate an array with var arguments.
+     * Notice: java's array is mutable, the method is not intend for an immutable array,
+     *         but just convert var arguments to array without calling like "new XXXType[]".
+     * for example: given a function f(Expression[] a), if we have a NOT,  an AND to pass to it,
+     * the call will be  f(new Expression[]{not, and}), it needs to invoke 'new Expression[]',
+     * if we don't want to invoke the new array operator, we can call with f(Utils.fastArray(not, and))
+     */
+    @SafeVarargs
+    public static <T> T[] fastArray(T... elements) {
+        return elements;
     }
 
     public static <I, O> List<O> fastMapList(List<I> list, int additionSize, Function<I, O> transformer) {

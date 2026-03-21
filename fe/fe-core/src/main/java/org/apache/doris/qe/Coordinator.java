@@ -19,8 +19,10 @@ package org.apache.doris.qe;
 
 import org.apache.doris.analysis.DescriptorTable;
 import org.apache.doris.analysis.StorageBackend;
+import org.apache.doris.catalog.AIResource;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.FsBroker;
+import org.apache.doris.catalog.Resource;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.MarkedCountDownLatch;
 import org.apache.doris.common.Pair;
@@ -37,6 +39,7 @@ import org.apache.doris.datasource.ExternalScanNode;
 import org.apache.doris.datasource.FileQueryScanNode;
 import org.apache.doris.datasource.hive.HMSTransaction;
 import org.apache.doris.datasource.iceberg.IcebergTransaction;
+import org.apache.doris.datasource.maxcompute.MCTransaction;
 import org.apache.doris.load.loadv2.LoadJob;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mysql.MysqlCommand;
@@ -89,6 +92,7 @@ import org.apache.doris.system.Backend;
 import org.apache.doris.system.SystemInfoService;
 import org.apache.doris.task.LoadEtlTask;
 import org.apache.doris.thrift.PaloInternalServiceVersion;
+import org.apache.doris.thrift.TAIResource;
 import org.apache.doris.thrift.TBrokerScanRange;
 import org.apache.doris.thrift.TDataSinkType;
 import org.apache.doris.thrift.TDescriptorTable;
@@ -562,6 +566,26 @@ public class Coordinator implements CoordInterface {
 
         this.idToBackend = Env.getCurrentSystemInfo().getBackendsByCurrentCluster();
 
+        // Log cluster info and groupCommitBackend for debugging NPE in PipelineExecContext
+        if (groupCommitBackend != null) {
+            String currentCluster = "unknown";
+            try {
+                if (ConnectContext.get() != null) {
+                    currentCluster = ConnectContext.get().getCloudCluster();
+                }
+            } catch (Exception e) {
+                LOG.debug("failed to get current cloud cluster for debug log", e);
+            }
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("query {} prepare: currentCluster={}, idToBackend.size={}, idToBackend.keys={},"
+                                + " groupCommitBackend=[id={}, host={}, cluster={}], groupCommitBackendInMap={}",
+                        DebugUtil.printId(queryId), currentCluster, idToBackend.size(), idToBackend.keySet(),
+                        groupCommitBackend.getId(), groupCommitBackend.getHost(),
+                        groupCommitBackend.getCloudClusterName(),
+                        idToBackend.containsKey(groupCommitBackend.getId()));
+            }
+        }
+
         if (LOG.isDebugEnabled()) {
             int backendNum = idToBackend.size();
             StringBuilder backendInfos = new StringBuilder("backends info:");
@@ -811,6 +835,7 @@ public class Coordinator implements CoordInterface {
             // TableValuedFunctionScanNode, we should ensure TableValuedFunctionScanNode does not
             // send data until ExchangeNode is ready to receive.
             boolean twoPhaseExecution = fragments.size() > 1;
+            boolean isSingleBackend = addressToBackendID.size() == 1;
             for (PlanFragment fragment : fragments) {
                 FragmentExecParams params = fragmentExecParamsMap.get(fragment.getFragmentId());
 
@@ -832,6 +857,12 @@ public class Coordinator implements CoordInterface {
                 // So that we can use one RPC to send all fragment instances of a BE.
                 for (Map.Entry<TNetworkAddress, TPipelineFragmentParams> entry : tParams.entrySet()) {
                     Long backendId = this.addressToBackendID.get(entry.getKey());
+                    if (backendId == null) {
+                        LOG.warn("query {} sendPipelineCtx: addressToBackendID lookup returned null!"
+                                + " address={}, fragmentId={}, addressToBackendID={}",
+                                DebugUtil.printId(queryId), entry.getKey(),
+                                fragment.getFragmentId(), addressToBackendID);
+                    }
                     backendFragments.add(Pair.of(fragment.getFragmentId(), backendId));
                     PipelineExecContext pipelineExecContext = new PipelineExecContext(fragment.getFragmentId(),
                             entry.getValue(), idToBackend.get(backendId), executionProfile, jobId);
@@ -841,6 +872,7 @@ public class Coordinator implements CoordInterface {
                     entry.getValue().setFragmentNumOnHost(hostCounter.count(pipelineExecContext.address));
                     entry.getValue().setBackendId(pipelineExecContext.backend.getId());
                     entry.getValue().setNeedWaitExecutionTrigger(twoPhaseExecution);
+                    entry.getValue().getQueryOptions().setSingleBackendQuery(isSingleBackend);
                     entry.getValue().setFragmentId(fragment.getFragmentId().asInt());
 
                     pipelineExecContexts.put(Pair.of(fragment.getFragmentId().asInt(), backendId), pipelineExecContext);
@@ -1985,15 +2017,17 @@ public class Coordinator implements CoordInterface {
     private int findMaxParallelFragmentIndex(PlanFragment fragment) {
         Preconditions.checkState(!fragment.getChildren().isEmpty(), "fragment has no children");
 
-        // exclude broadcast join right side's child fragments
-        List<PlanFragment> childFragmentCandidates = fragment.getChildren().stream()
-                .filter(e -> e.getOutputPartition() != DataPartition.UNPARTITIONED)
-                .collect(Collectors.toList());
+        List<PlanFragment> childFragmentCandidates = fragment.getChildren();
 
         int maxParallelism = 0;
         int maxParaIndex = 0;
         for (int i = 0; i < childFragmentCandidates.size(); i++) {
-            PlanFragmentId childFragmentId = childFragmentCandidates.get(i).getFragmentId();
+            PlanFragment planFragment = childFragmentCandidates.get(i);
+            // exclude broadcast join right side's child fragments
+            if (planFragment.getOutputPartition() == DataPartition.UNPARTITIONED) {
+                continue;
+            }
+            PlanFragmentId childFragmentId = planFragment.getFragmentId();
             int currentChildFragmentParallelism = fragmentExecParamsMap.get(childFragmentId).instanceExecParams.size();
             if (currentChildFragmentParallelism > maxParallelism) {
                 maxParallelism = currentChildFragmentParallelism;
@@ -2480,6 +2514,10 @@ public class Coordinator implements CoordInterface {
         if (params.isSetIcebergCommitDatas()) {
             ((IcebergTransaction) Env.getCurrentEnv().getGlobalExternalTransactionInfoMgr().getTxnById(txnId))
                 .updateIcebergCommitData(params.getIcebergCommitDatas());
+        }
+        if (params.isSetMcCommitDatas()) {
+            ((MCTransaction) Env.getCurrentEnv().getGlobalExternalTransactionInfoMgr().getTxnById(txnId))
+                .updateMCCommitData(params.getMcCommitDatas());
         }
 
         if (ctx.done) {
@@ -3235,6 +3273,17 @@ public class Coordinator implements CoordInterface {
                     if (ignoreDataDistribution) {
                         params.setParallelInstances(parallelTasksNum);
                     }
+
+                    // Used for AI Functions
+                    Map<String, TAIResource> aiResourceMap = Maps.newLinkedHashMap();
+                    for (Resource resource : Env.getCurrentEnv().getResourceMgr()
+                                                    .getResource(Resource.ResourceType.AI)) {
+                        if (resource instanceof AIResource) {
+                            aiResourceMap.put(resource.getName(), ((AIResource) resource).toThrift());
+                        }
+                    }
+
+                    params.setAiResources(aiResourceMap);
                     res.put(instanceExecParam.host, params);
                     res.get(instanceExecParam.host).setBucketSeqToInstanceIdx(new HashMap<Integer, Integer>());
                     res.get(instanceExecParam.host).setShuffleIdxToInstanceIdx(new HashMap<Integer, Integer>());

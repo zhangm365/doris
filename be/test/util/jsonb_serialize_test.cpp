@@ -124,7 +124,7 @@ TEST_F(JsonbSerializeTest, serialize) {
     ASSERT_EQ(memcmp(output->getBuffer(), serialized_data.data(), serialized_data.size()), 0)
             << "Serialized data does not match expected data";
 
-    JsonbDocument* jsonb_doc = nullptr;
+    const JsonbDocument* jsonb_doc = nullptr;
     st = JsonbDocument::checkAndCreateDocument(output->getBuffer(), output->getSize(), &jsonb_doc);
     ASSERT_TRUE(st.ok()) << "Failed to create JsonbDocument: " << st.to_string();
 }
@@ -137,20 +137,19 @@ TEST_F(JsonbSerializeTest, serialization2) {
     writer.writeKey("key_decimal32", 13);
 
     writer.writeKey("key_decimal32");
-    vectorized::Decimal32 decimal_value32(int32_t(99999999));
+    Decimal32 decimal_value32(int32_t(99999999));
     writer.writeDecimal(decimal_value32, 9, 4);
 
     writer.writeKey("key_decimal64");
-    vectorized::Decimal64 decimal_value64(int64_t(999999999999999999ULL));
+    Decimal64 decimal_value64(int64_t(999999999999999999ULL));
     writer.writeDecimal(decimal_value64, 18, 4);
 
     writer.writeKey("key_decimal128");
-    vectorized::Decimal128V3 decimal_value((__int128_t(std::numeric_limits<uint64_t>::max())));
+    Decimal128V3 decimal_value((__int128_t(std::numeric_limits<uint64_t>::max())));
     writer.writeDecimal(decimal_value, 27, 8);
 
     writer.writeKey("key_decimal256");
-    vectorized::Decimal256 decimal256_value(
-            (wide::Int256(std::numeric_limits<__int128_t>::max()) * 2));
+    Decimal256 decimal256_value((wide::Int256(std::numeric_limits<__int128_t>::max()) * 2));
     writer.writeDecimal(decimal256_value, 40, 8);
 
     writer.writeEndObject();

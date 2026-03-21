@@ -21,9 +21,9 @@
 
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
-#include "olap/rowset/rowset.h"
-#include "olap/schema_change.h"
-#include "olap/tablet_fwd.h"
+#include "storage/rowset/rowset.h"
+#include "storage/schema_change/schema_change.h"
+#include "storage/tablet/tablet_fwd.h"
 
 namespace doris {
 
@@ -39,13 +39,14 @@ public:
     void clean_up_on_failure();
 
 private:
+    bool _should_cache_sc_output(const std::vector<RowsetSharedPtr>& input_rowsets);
+
     Status _convert_historical_rowsets(const SchemaChangeParams& sc_params,
                                        cloud::TabletJobInfoPB& job);
 
     Status _process_delete_bitmap(int64_t alter_version, int64_t start_calc_delete_bitmap_version,
                                   int64_t initiator, const std::string& vault_id);
 
-private:
     CloudStorageEngine& _cloud_storage_engine;
     std::shared_ptr<CloudTablet> _base_tablet;
     std::shared_ptr<CloudTablet> _new_tablet;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_mysql_all_types_tvf", "p0,external,mysql,external_docker,external_docker_mysql") {
+suite("test_mysql_all_types_tvf", "p0,external") {
     String enabled = context.config.otherConfigs.get("enableJdbcTest")
     String externalEnvIp = context.config.otherConfigs.get("externalEnvIp")
     String s3_endpoint = getS3Endpoint()
@@ -30,7 +30,8 @@ suite("test_mysql_all_types_tvf", "p0,external,mysql,external_docker,external_do
             "password"="123456",
             "jdbc_url" = "jdbc:mysql://${externalEnvIp}:${mysql_port}/doris_test?useSSL=false",
             "driver_url" = "${driver_url}",
-            "driver_class" = "com.mysql.cj.jdbc.Driver"
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "enable.mapping.varbinary" = "true"
         );"""
 
         qt_desc_tvf_all_types_null """desc function query('catalog' = 'mysql_all_type_tvf_test', 'query' = 'select * from all_types_nullable')"""

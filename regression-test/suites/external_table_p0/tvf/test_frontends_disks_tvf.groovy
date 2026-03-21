@@ -16,26 +16,39 @@
 // under the License.
 
 // This suit test the `frontends_disks` tvf
-suite("test_frontends_disks_tvf", "p0,external,external_docker") {
+suite("test_frontends_disks_tvf", "p0,external") {
     List<List<Object>> table =  sql """ select * from `frontends_disks`(); """
     assertTrue(table.size() > 0)
-    assertTrue(table[0].size == 10)
+    assertTrue(table[0].size() == 10)
+
+    List<List<Object>> titleNames =  sql """ describe function frontends_disks(); """
+
+    assertTrue(titleNames[0][0] == "Name")
+    assertTrue(titleNames[1][0] == "Host")
+    assertTrue(titleNames[2][0] == "DirType")
+    assertTrue(titleNames[3][0] == "Dir")
+    assertTrue(titleNames[4][0] == "Filesystem")
+    assertTrue(titleNames[5][0] == "Capacity")
+    assertTrue(titleNames[6][0] == "Used")
+    assertTrue(titleNames[7][0] == "Available")
+    assertTrue(titleNames[8][0] == "UseRate")
+    assertTrue(titleNames[9][0] == "MountOn")
 
     // filter columns
     table = sql """ select Name from `frontends_disks`();"""
     assertTrue(table.size() > 0)
-    assertTrue(table[0].size == 1)
+    assertTrue(table[0].size() == 1)
 
     // case insensitive
     table = sql """ select name, host, dirtype, dir from frontends_disks() order by dirtype;"""
     assertTrue(table.size() > 0)
-    assertTrue(table[0].size == 4)
+    assertTrue(table[0].size() == 4)
     assertEquals("audit-log", table[0][2])
 
     // test aliase columns
     table = sql """ select name as n, host as h, dirtype as a from frontends_disks() order by dirtype; """
     assertTrue(table.size() > 0)
-    assertTrue(table[0].size == 3)
+    assertTrue(table[0].size() == 3)
     assertEquals("audit-log", table[0][2])
 
     // test changing position of columns

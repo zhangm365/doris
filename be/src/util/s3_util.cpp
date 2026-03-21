@@ -20,7 +20,9 @@
 #include <aws/core/auth/AWSAuthSigner.h>
 #include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
+#include <aws/core/auth/STSCredentialsProvider.h>
 #include <aws/core/client/DefaultRetryStrategy.h>
+#include <aws/core/platform/Environment.h>
 #include <aws/core/utils/logging/LogLevel.h>
 #include <aws/core/utils/logging/LogSystemInterface.h>
 #include <aws/core/utils/memory/stl/AWSStringStream.h>
@@ -28,15 +30,20 @@
 #include <aws/s3/S3Client.h>
 #include <aws/sts/STSClient.h>
 #include <bvar/reducer.h>
-#include <util/string_util.h>
+#include <cpp/s3_rate_limiter.h>
 
 #include <atomic>
+
+#include "util/string_util.h"
+
 #ifdef USE_AZURE
 #include <azure/core/diagnostics/logger.hpp>
+#include <azure/core/http/curl_transport.hpp>
 #include <azure/storage/blobs/blob_container_client.hpp>
 #endif
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <ostream>
@@ -53,11 +60,11 @@
 #ifdef USE_AZURE
 #include "io/fs/azure_obj_storage_client.h"
 #endif
+#include "exec/scan/scanner_scheduler.h"
 #include "io/fs/obj_storage_client.h"
 #include "io/fs/s3_obj_storage_client.h"
 #include "runtime/exec_env.h"
-#include "s3_uri.h"
-#include "vec/exec/scan/scanner_scheduler.h"
+#include "util/s3_uri.h"
 
 namespace doris {
 namespace s3_bvar {
@@ -105,6 +112,33 @@ bool to_int(std::string_view str, int& res) {
     return ec == std::errc {};
 }
 
+#ifdef USE_AZURE
+std::string env_or_empty(const char* env_name) {
+    if (const char* value = std::getenv(env_name); value != nullptr) {
+        return value;
+    }
+    return "";
+}
+
+std::string build_azure_tls_debug_context(const std::string& selected_ca_file) {
+    bool selected_ca_exists = false;
+    bool selected_ca_readable = false;
+    if (!selected_ca_file.empty()) {
+        std::error_code ec;
+        selected_ca_exists = std::filesystem::exists(selected_ca_file, ec) && !ec;
+        std::ifstream input(selected_ca_file);
+        selected_ca_readable = input.good();
+    }
+
+    return fmt::format(
+            "tls_debug(ca_cert_file_paths='{}', selected_ca_file='{}', selected_ca_exists={}, "
+            "selected_ca_readable={}, SSL_CERT_FILE='{}', CURL_CA_BUNDLE='{}', SSL_CERT_DIR='{}')",
+            config::ca_cert_file_paths, selected_ca_file, selected_ca_exists, selected_ca_readable,
+            env_or_empty("SSL_CERT_FILE"), env_or_empty("CURL_CA_BUNDLE"),
+            env_or_empty("SSL_CERT_DIR"));
+}
+#endif
+
 constexpr char USE_PATH_STYLE[] = "use_path_style";
 
 constexpr char AZURE_PROVIDER_STRING[] = "AZURE";
@@ -114,13 +148,14 @@ constexpr char S3_SK[] = "AWS_SECRET_KEY";
 constexpr char S3_ENDPOINT[] = "AWS_ENDPOINT";
 constexpr char S3_REGION[] = "AWS_REGION";
 constexpr char S3_TOKEN[] = "AWS_TOKEN";
-constexpr char S3_MAX_CONN_SIZE[] = "AWS_MAX_CONN_SIZE";
+constexpr char S3_MAX_CONN_SIZE[] = "AWS_MAX_CONNECTIONS";
 constexpr char S3_REQUEST_TIMEOUT_MS[] = "AWS_REQUEST_TIMEOUT_MS";
 constexpr char S3_CONN_TIMEOUT_MS[] = "AWS_CONNECTION_TIMEOUT_MS";
 constexpr char S3_NEED_OVERRIDE_ENDPOINT[] = "AWS_NEED_OVERRIDE_ENDPOINT";
 
 constexpr char S3_ROLE_ARN[] = "AWS_ROLE_ARN";
 constexpr char S3_EXTERNAL_ID[] = "AWS_EXTERNAL_ID";
+constexpr char S3_CREDENTIALS_PROVIDER_TYPE[] = "AWS_CREDENTIALS_PROVIDER_TYPE";
 } // namespace
 
 bvar::Adder<int64_t> get_rate_limit_ns("get_rate_limit_ns");
@@ -128,9 +163,64 @@ bvar::Adder<int64_t> get_rate_limit_exceed_req_num("get_rate_limit_exceed_req_nu
 bvar::Adder<int64_t> put_rate_limit_ns("put_rate_limit_ns");
 bvar::Adder<int64_t> put_rate_limit_exceed_req_num("put_rate_limit_exceed_req_num");
 
+static std::atomic<int64_t> last_s3_get_token_bucket_tokens {0};
+static std::atomic<int64_t> last_s3_get_token_limit {0};
+static std::atomic<int64_t> last_s3_get_token_per_second {0};
+static std::atomic<int64_t> last_s3_put_token_per_second {0};
+static std::atomic<int64_t> last_s3_put_token_bucket_tokens {0};
+static std::atomic<int64_t> last_s3_put_token_limit {0};
+
+static std::atomic<bool> updating_get_limiter {false};
+static std::atomic<bool> updating_put_limiter {false};
+
 S3RateLimiterHolder* S3ClientFactory::rate_limiter(S3RateLimitType type) {
     CHECK(type == S3RateLimitType::GET || type == S3RateLimitType::PUT) << to_string(type);
     return _rate_limiters[static_cast<size_t>(type)].get();
+}
+
+template <S3RateLimitType LimiterType>
+void update_rate_limiter_if_changed(int64_t current_tps, int64_t current_bucket,
+                                    int64_t current_limit, std::atomic<int64_t>& last_tps,
+                                    std::atomic<int64_t>& last_bucket,
+                                    std::atomic<int64_t>& last_limit,
+                                    std::atomic<bool>& updating_flag, const char* limiter_name) {
+    if (last_tps.load(std::memory_order_relaxed) != current_tps ||
+        last_bucket.load(std::memory_order_relaxed) != current_bucket ||
+        last_limit.load(std::memory_order_relaxed) != current_limit) {
+        bool expected = false;
+        if (!updating_flag.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (last_tps.load(std::memory_order_acquire) != current_tps ||
+            last_bucket.load(std::memory_order_acquire) != current_bucket ||
+            last_limit.load(std::memory_order_acquire) != current_limit) {
+            int ret =
+                    reset_s3_rate_limiter(LimiterType, current_tps, current_bucket, current_limit);
+
+            if (ret == 0) {
+                last_tps.store(current_tps, std::memory_order_release);
+                last_bucket.store(current_bucket, std::memory_order_release);
+                last_limit.store(current_limit, std::memory_order_release);
+            } else {
+                LOG(WARNING) << "Failed to reset S3 " << limiter_name
+                             << " rate limiter, error code: " << ret;
+            }
+        }
+
+        updating_flag.store(false, std::memory_order_release);
+    }
+}
+
+void check_s3_rate_limiter_config_changed() {
+    update_rate_limiter_if_changed<S3RateLimitType::GET>(
+            config::s3_get_token_per_second, config::s3_get_bucket_tokens,
+            config::s3_get_token_limit, last_s3_get_token_per_second,
+            last_s3_get_token_bucket_tokens, last_s3_get_token_limit, updating_get_limiter, "GET");
+
+    update_rate_limiter_if_changed<S3RateLimitType::PUT>(
+            config::s3_put_token_per_second, config::s3_put_bucket_tokens,
+            config::s3_put_token_limit, last_s3_put_token_per_second,
+            last_s3_put_token_bucket_tokens, last_s3_put_token_limit, updating_put_limiter, "PUT");
 }
 
 int reset_s3_rate_limiter(S3RateLimitType type, size_t max_speed, size_t max_burst, size_t limit) {
@@ -201,6 +291,17 @@ std::shared_ptr<io::ObjStorageClient> S3ClientFactory::create(const S3ClientConf
         return nullptr;
     }
 
+    check_s3_rate_limiter_config_changed();
+
+#ifdef BE_TEST
+    {
+        std::lock_guard l(_lock);
+        if (_test_client_creator) {
+            return _test_client_creator(s3_conf);
+        }
+    }
+#endif
+
     {
         uint64_t hash = s3_conf.get_hash();
         std::lock_guard l(_lock);
@@ -222,6 +323,19 @@ std::shared_ptr<io::ObjStorageClient> S3ClientFactory::create(const S3ClientConf
     return obj_client;
 }
 
+#ifdef BE_TEST
+void S3ClientFactory::set_client_creator_for_test(
+        std::function<std::shared_ptr<io::ObjStorageClient>(const S3ClientConf&)> creator) {
+    std::lock_guard l(_lock);
+    _test_client_creator = std::move(creator);
+}
+
+void S3ClientFactory::clear_client_creator_for_test() {
+    std::lock_guard l(_lock);
+    _test_client_creator = nullptr;
+}
+#endif
+
 std::shared_ptr<io::ObjStorageClient> S3ClientFactory::_create_azure_client(
         const S3ClientConf& s3_conf) {
 #ifdef USE_AZURE
@@ -229,28 +343,34 @@ std::shared_ptr<io::ObjStorageClient> S3ClientFactory::_create_azure_client(
             std::make_shared<Azure::Storage::StorageSharedKeyCredential>(s3_conf.ak, s3_conf.sk);
 
     const std::string container_name = s3_conf.bucket;
-    std::string uri;
-    if (config::force_azure_blob_global_endpoint) {
-        uri = fmt::format("https://{}.blob.core.windows.net/{}", s3_conf.ak, container_name);
-    } else {
-        uri = fmt::format("{}/{}", s3_conf.endpoint, container_name);
-        if (s3_conf.endpoint.find("://") == std::string::npos) {
-            uri = "https://" + uri;
-        }
+    std::string uri = fmt::format("{}/{}", s3_conf.endpoint, container_name);
+    if (s3_conf.endpoint.find("://") == std::string::npos) {
+        uri = "https://" + uri;
     }
 
     Azure::Storage::Blobs::BlobClientOptions options;
     options.Retry.StatusCodes.insert(Azure::Core::Http::HttpStatusCode::TooManyRequests);
     options.Retry.MaxRetries = config::max_s3_client_retry;
     options.PerRetryPolicies.emplace_back(std::make_unique<AzureRetryRecordPolicy>());
+    if (_ca_cert_file_path.empty()) {
+        _ca_cert_file_path = get_valid_ca_cert_path(doris::split(config::ca_cert_file_paths, ";"));
+    }
+    if (!_ca_cert_file_path.empty()) {
+        Azure::Core::Http::CurlTransportOptions curl_options;
+        curl_options.CAInfo = _ca_cert_file_path;
+        options.Transport.Transport =
+                std::make_shared<Azure::Core::Http::CurlTransport>(std::move(curl_options));
+    }
 
     std::string normalized_uri = normalize_http_uri(uri);
     VLOG_DEBUG << "uri:" << uri << ", normalized_uri:" << normalized_uri;
+    std::string tls_debug_context = build_azure_tls_debug_context(_ca_cert_file_path);
 
     auto containerClient = std::make_shared<Azure::Storage::Blobs::BlobContainerClient>(
             uri, cred, std::move(options));
     LOG_INFO("create one azure client with {}", s3_conf.to_string());
-    return std::make_shared<io::AzureObjStorageClient>(std::move(containerClient));
+    return std::make_shared<io::AzureObjStorageClient>(std::move(containerClient),
+                                                       std::move(tls_debug_context));
 #else
     LOG_FATAL("BE is not compiled with azure support, export BUILD_AZURE=ON before building");
     return nullptr;
@@ -301,6 +421,28 @@ S3ClientFactory::_get_aws_credentials_provider_v1(const S3ClientConf& s3_conf) {
     return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
 }
 
+std::shared_ptr<Aws::Auth::AWSCredentialsProvider> S3ClientFactory::_create_credentials_provider(
+        CredProviderType type) {
+    switch (type) {
+    case CredProviderType::Env:
+        return std::make_shared<Aws::Auth::EnvironmentAWSCredentialsProvider>();
+    case CredProviderType::SystemProperties:
+        return std::make_shared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>();
+    case CredProviderType::WebIdentity:
+        return std::make_shared<Aws::Auth::STSAssumeRoleWebIdentityCredentialsProvider>();
+    case CredProviderType::Container:
+        return std::make_shared<Aws::Auth::TaskRoleCredentialsProvider>(
+                Aws::Environment::GetEnv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").c_str());
+    case CredProviderType::InstanceProfile:
+        return std::make_shared<Aws::Auth::InstanceProfileCredentialsProvider>();
+    case CredProviderType::Anonymous:
+        return std::make_shared<Aws::Auth::AnonymousAWSCredentialsProvider>();
+    case CredProviderType::Default:
+    default:
+        return std::make_shared<CustomAwsCredentialsProviderChain>();
+    }
+}
+
 std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
 S3ClientFactory::_get_aws_credentials_provider_v2(const S3ClientConf& s3_conf) {
     if (!s3_conf.ak.empty() && !s3_conf.sk.empty()) {
@@ -312,11 +454,8 @@ S3ClientFactory::_get_aws_credentials_provider_v2(const S3ClientConf& s3_conf) {
         return std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(std::move(aws_cred));
     }
 
-    if (s3_conf.cred_provider_type == CredProviderType::InstanceProfile) {
-        if (s3_conf.role_arn.empty()) {
-            return std::make_shared<CustomAwsCredentialsProviderChain>();
-        }
-
+    // Handle role_arn for assume role scenario
+    if (!s3_conf.role_arn.empty()) {
         Aws::Client::ClientConfiguration clientConfiguration =
                 S3ClientFactory::getClientConfiguration();
 
@@ -328,15 +467,16 @@ S3ClientFactory::_get_aws_credentials_provider_v2(const S3ClientConf& s3_conf) {
             clientConfiguration.caFile = _ca_cert_file_path;
         }
 
-        auto stsClient = std::make_shared<Aws::STS::STSClient>(
-                std::make_shared<CustomAwsCredentialsProviderChain>(), clientConfiguration);
+        auto baseProvider = _create_credentials_provider(s3_conf.cred_provider_type);
+        auto stsClient = std::make_shared<Aws::STS::STSClient>(baseProvider, clientConfiguration);
 
         return std::make_shared<Aws::Auth::STSAssumeRoleCredentialsProvider>(
                 s3_conf.role_arn, Aws::String(), s3_conf.external_id,
                 Aws::Auth::DEFAULT_CREDS_LOAD_FREQ_SECONDS, stsClient);
     }
 
-    return std::make_shared<CustomAwsCredentialsProviderChain>();
+    // Return provider based on cred_provider_type
+    return _create_credentials_provider(s3_conf.cred_provider_type);
 }
 
 std::shared_ptr<Aws::Auth::AWSCredentialsProvider> S3ClientFactory::get_aws_credentials_provider(
@@ -369,8 +509,7 @@ std::shared_ptr<io::ObjStorageClient> S3ClientFactory::_create_s3_client(
     if (s3_conf.max_connections > 0) {
         aws_config.maxConnections = s3_conf.max_connections;
     } else {
-        // AWS SDK max concurrent tcp connections for a single http client to use. Default 25.
-        aws_config.maxConnections = std::max(config::doris_scanner_thread_pool_thread_num, 25);
+        aws_config.maxConnections = 102400;
     }
 
     aws_config.requestTimeoutMs = 30000;
@@ -460,12 +599,17 @@ Status S3ClientFactory::convert_properties_to_s3_conf(
     }
 
     if (auto it = properties.find(S3_ROLE_ARN); it != properties.end()) {
-        s3_conf->client_conf.cred_provider_type = CredProviderType::InstanceProfile;
+        // Keep provider type as Default unless explicitly configured by
+        // AWS_CREDENTIALS_PROVIDER_TYPE, consistent with FE behavior.
         s3_conf->client_conf.role_arn = it->second;
     }
 
     if (auto it = properties.find(S3_EXTERNAL_ID); it != properties.end()) {
         s3_conf->client_conf.external_id = it->second;
+    }
+
+    if (auto it = properties.find(S3_CREDENTIALS_PROVIDER_TYPE); it != properties.end()) {
+        s3_conf->client_conf.cred_provider_type = cred_provider_type_from_string(it->second);
     }
 
     if (auto st = is_s3_conf_valid(s3_conf->client_conf); !st.ok()) {

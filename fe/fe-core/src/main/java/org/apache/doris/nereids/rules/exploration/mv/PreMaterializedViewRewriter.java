@@ -59,8 +59,6 @@ public class PreMaterializedViewRewriter {
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.PUSH_LIMIT_THROUGH_PROJECT_WINDOW.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.PUSH_LIMIT_THROUGH_UNION.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.PUSH_LIMIT_THROUGH_WINDOW.ordinal());
-        NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.LIMIT_SORT_TO_TOP_N.ordinal());
-        NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.LIMIT_AGG_TO_TOPN_AGG.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.ELIMINATE_CONST_JOIN_CONDITION.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.MERGE_PERCENTILE_TO_ARRAY.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.SUM_LITERAL_REWRITE.ordinal());
@@ -71,7 +69,6 @@ public class PreMaterializedViewRewriter {
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.PROCESS_SCALAR_AGG_MUST_USE_MULTI_DISTINCT.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.ELIMINATE_GROUP_BY_KEY_BY_UNIFORM.ordinal());
         NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.SALT_JOIN.ordinal());
-        NEED_PRE_REWRITE_RULE_TYPES.set(RuleType.AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION.ordinal());
     }
 
     /**
@@ -91,11 +88,9 @@ public class PreMaterializedViewRewriter {
         Pair<Map<List<String>, MaterializationContext>, BitSet> chosenMaterializationAndUsedTable
                 = MaterializedViewUtils.getChosenMaterializationAndUsedTable(physicalPlan,
                 cascadesContext.getAllMaterializationContexts());
-        // Calc the table id set which is used by physical plan
-        cascadesContext.getMemo().incrementAndGetRefreshVersion();
         // Extract logical plan by table id set by the corresponding best physical plan
         StructInfo structInfo = root.getStructInfoMap().getStructInfo(cascadesContext,
-                chosenMaterializationAndUsedTable.value(), root, null, true);
+                chosenMaterializationAndUsedTable.value(), root, null, true, false);
         if (structInfo == null) {
             LOG.error("preMaterializedViewRewriter rewrite structInfo is null, query id is {}",
                     cascadesContext.getConnectContext().getQueryIdentifier());

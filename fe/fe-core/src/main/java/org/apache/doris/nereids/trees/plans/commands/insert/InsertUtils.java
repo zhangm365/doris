@@ -17,6 +17,8 @@
 
 package org.apache.doris.nereids.trees.plans.commands.insert;
 
+import org.apache.doris.analysis.ExprToStringValueVisitor;
+import org.apache.doris.analysis.StringValueContext;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
@@ -26,9 +28,10 @@ import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.Config;
-import org.apache.doris.common.FormatOptions;
+import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.datasource.jdbc.JdbcExternalTable;
+import org.apache.doris.foundation.format.FormatOptions;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.analyzer.Scope;
 import org.apache.doris.nereids.analyzer.UnboundAlias;
@@ -39,6 +42,7 @@ import org.apache.doris.nereids.analyzer.UnboundHiveTableSink;
 import org.apache.doris.nereids.analyzer.UnboundIcebergTableSink;
 import org.apache.doris.nereids.analyzer.UnboundInlineTable;
 import org.apache.doris.nereids.analyzer.UnboundJdbcTableSink;
+import org.apache.doris.nereids.analyzer.UnboundMaxComputeTableSink;
 import org.apache.doris.nereids.analyzer.UnboundSlot;
 import org.apache.doris.nereids.analyzer.UnboundStar;
 import org.apache.doris.nereids.analyzer.UnboundTableSink;
@@ -87,14 +91,16 @@ import org.apache.doris.transaction.TransactionEntry;
 import org.apache.doris.transaction.TransactionState;
 import org.apache.doris.transaction.TransactionStatus;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -178,7 +184,8 @@ public class InsertUtils {
                 throw new AnalysisException(
                         "do not support non-literal expr in transactional insert operation: " + expr.toSql());
             }
-            row.addColBuilder().setValue(((Literal) expr).toLegacyLiteral().getStringValueForStreamLoad(options));
+            row.addColBuilder().setValue(((Literal) expr).toLegacyLiteral().accept(
+                    ExprToStringValueVisitor.INSTANCE, StringValueContext.forStreamLoad(options)));
         }
         return row.build();
     }
@@ -291,6 +298,19 @@ public class InsertUtils {
             // For JDBC External Table, we always allow certain columns to be missing during insertion
             // Specific check for non-nullable columns only if insertion is direct VALUES or SELECT constants
         }
+        // Re-read partial update settings from session variable to handle multi-statement
+        // batches where SET and INSERT are parsed together before execution.
+        // Only apply to original INSERT statements, not DELETE/UPDATE converted to INSERT.
+        if (unboundLogicalSink instanceof UnboundTableSink
+                && unboundLogicalSink.getDMLCommandType() == DMLCommandType.INSERT) {
+            ConnectContext ctx = ConnectContext.get();
+            if (ctx != null) {
+                ((UnboundTableSink<? extends Plan>) unboundLogicalSink)
+                        .setPartialUpdate(ctx.getSessionVariable().isEnableUniqueKeyPartialUpdate());
+                ((UnboundTableSink<? extends Plan>) unboundLogicalSink)
+                        .setPartialUpdateNewKeyPolicy(ctx.getSessionVariable().getPartialUpdateNewRowPolicy());
+            }
+        }
         if (table instanceof OlapTable && ((OlapTable) table).getKeysType() == KeysType.UNIQUE_KEYS) {
             if (unboundLogicalSink instanceof UnboundTableSink
                     && ((UnboundTableSink<? extends Plan>) unboundLogicalSink).isPartialUpdate()) {
@@ -360,6 +380,19 @@ public class InsertUtils {
         ImmutableList.Builder<List<NamedExpression>> optimizedRowConstructors
                 = ImmutableList.builderWithExpectedSize(unboundInlineTable.getConstantExprsList().size());
         List<Column> columns = table.getBaseSchema(false);
+        Map<String, Expression> staticPartitions = null;
+        if (unboundLogicalSink instanceof UnboundIcebergTableSink) {
+            staticPartitions = ((UnboundIcebergTableSink<?>) unboundLogicalSink).getStaticPartitionKeyValues();
+        } else if (unboundLogicalSink instanceof UnboundMaxComputeTableSink) {
+            staticPartitions = ((UnboundMaxComputeTableSink<?>) unboundLogicalSink).getStaticPartitionKeyValues();
+        }
+        if (staticPartitions != null && !staticPartitions.isEmpty()
+                && CollectionUtils.isEmpty(unboundLogicalSink.getColNames())) {
+            Set<String> staticPartitionColNames = staticPartitions.keySet();
+            columns = columns.stream()
+                    .filter(column -> !staticPartitionColNames.contains(column.getName()))
+                    .collect(ImmutableList.toImmutableList());
+        }
 
         ConnectContext context = ConnectContext.get();
         ExpressionRewriteContext rewriteContext = null;
@@ -579,6 +612,8 @@ public class InsertUtils {
             unboundTableSink = (UnboundDictionarySink<? extends Plan>) plan;
         } else if (plan instanceof UnboundBlackholeSink) {
             unboundTableSink = (UnboundBlackholeSink<? extends Plan>) plan;
+        } else if (plan instanceof UnboundMaxComputeTableSink) {
+            unboundTableSink = (UnboundMaxComputeTableSink<? extends Plan>) plan;
         } else {
             throw new AnalysisException(
                     "the root of plan only accept Olap, Dictionary, Hive, Iceberg or Jdbc table sink, but it is "
@@ -674,5 +709,99 @@ public class InsertUtils {
                 }
             }
         }
+    }
+
+    /**
+     * Cut the error message to ensure it fits within MySQL error packet size limit.
+     * @param msg the main error message
+     * @param firstErrorMsg the first error message from coordinator
+     * @param url the tracking URL for error log
+     * @return the final truncated error message
+     */
+    public static String getFinalErrorMsg(String msg, String firstErrorMsg, String url) {
+        int maxTotalBytes = 512;
+
+        // For test
+        // 1. error msg length > 512, we will truncate it first to make sure the URL
+        //    and FirstErrorMsg keep complete.
+        // 2. if the FirstErrorMsg and URL length > 512 too, we will remind user use
+        //    `show load` too see detail
+        if (DebugPointUtil.isEnable("TestErrorMsgTruncate")) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 128; i++) {
+                sb.append("Test");
+            }
+            msg = sb.toString();
+            firstErrorMsg = sb.toString();
+            url = sb.toString();
+        }
+
+        // Calculate lengths first to avoid unnecessary string concatenation
+        int firstErrorMsgPartLen = 0;
+        int urlPartLen = 0;
+
+        if (!Strings.isNullOrEmpty(firstErrorMsg)) {
+            firstErrorMsgPartLen = ". first_error_msg: ".length() + firstErrorMsg.length();
+        }
+
+        if (!Strings.isNullOrEmpty(url)) {
+            urlPartLen = ". url: ".length() + url.length();
+        }
+
+        // use boolean too avoid string copy
+        boolean useFirstErrorMsgPlaceholder = false;
+        boolean useUrlPlaceholder = false;
+
+        // special case: url length > 512 or first error msg length > 512 or sum > 512
+        if (urlPartLen > maxTotalBytes && firstErrorMsgPartLen > maxTotalBytes) {
+            useUrlPlaceholder = true;
+            urlPartLen = ". url: please use `show load` for detail msg".length();
+            // only show once is enough
+            firstErrorMsgPartLen = 0;
+        } else if (urlPartLen > maxTotalBytes) {
+            useUrlPlaceholder = true;
+            urlPartLen = ". url: please use `show load` for detail msg".length();
+        } else if (firstErrorMsgPartLen > maxTotalBytes) {
+            useFirstErrorMsgPlaceholder = true;
+            firstErrorMsgPartLen = ". first_error_msg: please use `show load` for detail msg".length();
+        } else if (urlPartLen + firstErrorMsgPartLen > maxTotalBytes) {
+            int tempLen = ". url: please use `show load` for detail msg".length();
+            if (tempLen + firstErrorMsgPartLen > maxTotalBytes) {
+                // just leave firstErrorMsg
+                urlPartLen = 0;
+            } else {
+                useUrlPlaceholder = true;
+                urlPartLen = tempLen;
+            }
+        }
+
+        int maxMessageBytes = maxTotalBytes - firstErrorMsgPartLen - urlPartLen;
+
+        if (msg.length() > maxMessageBytes && maxMessageBytes > 0) {
+            msg = msg.substring(0, maxMessageBytes - 1);
+        }
+
+        StringBuilder finalErrorMsg = new StringBuilder();
+        finalErrorMsg.append(msg);
+
+        // Append firstErrorMsg part directly
+        if (firstErrorMsgPartLen > 0) {
+            if (useFirstErrorMsgPlaceholder) {
+                finalErrorMsg.append(". first_error_msg: please use `show load` for detail msg");
+            } else {
+                finalErrorMsg.append(". first_error_msg: ").append(firstErrorMsg);
+            }
+        }
+
+        // Append url part directly
+        if (urlPartLen > 0) {
+            if (useUrlPlaceholder) {
+                finalErrorMsg.append(". url: please use `show load` for detail msg");
+            } else {
+                finalErrorMsg.append(". url: ").append(url);
+            }
+        }
+
+        return finalErrorMsg.toString();
     }
 }

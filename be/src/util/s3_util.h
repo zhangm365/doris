@@ -25,6 +25,7 @@
 #include <gen_cpp/AgentService_types.h>
 #include <gen_cpp/cloud.pb.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -32,10 +33,10 @@
 #include <unordered_map>
 
 #include "common/status.h"
+#include "core/string_ref.h"
 #include "cpp/aws_common.h"
 #include "cpp/s3_rate_limiter.h"
 #include "io/fs/obj_storage_client.h"
-#include "vec/common/string_ref.h"
 
 namespace Aws::S3 {
 class S3Client;
@@ -62,6 +63,7 @@ extern bvar::LatencyRecorder s3_copy_object_latency;
 }; // namespace s3_bvar
 
 std::string hide_access_key(const std::string& ak);
+int reset_s3_rate_limiter(S3RateLimitType type, size_t max_speed, size_t max_burst, size_t limit);
 
 class S3URI;
 struct S3ClientConf {
@@ -86,8 +88,8 @@ struct S3ClientConf {
 
     uint64_t get_hash() const {
         uint64_t hash_code = 0;
-        hash_code ^= crc32_hash(ak);
-        hash_code ^= crc32_hash(sk);
+        // Use crc32_hash(ak + sk) hash to prevent swapped AK/SK order from producing same result.
+        hash_code ^= crc32_hash(ak + sk);
         hash_code ^= crc32_hash(token);
         hash_code ^= crc32_hash(endpoint);
         hash_code ^= crc32_hash(region);
@@ -148,10 +150,18 @@ public:
         // So here we use a static instance, and deep copy every time
         // to avoid unnecessary operations.
         static Aws::Client::ClientConfiguration instance;
+        instance.requestTimeoutMs = config::aws_client_request_timeout_ms;
         return instance;
     }
 
     S3RateLimiterHolder* rate_limiter(S3RateLimitType type);
+
+#ifdef BE_TEST
+    void set_client_creator_for_test(
+            std::function<std::shared_ptr<io::ObjStorageClient>(const S3ClientConf&)> creator);
+
+    void clear_client_creator_for_test();
+#endif
 
 private:
     std::shared_ptr<io::ObjStorageClient> _create_s3_client(const S3ClientConf& s3_conf);
@@ -160,6 +170,8 @@ private:
             const S3ClientConf& s3_conf);
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> _get_aws_credentials_provider_v2(
             const S3ClientConf& s3_conf);
+    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> _create_credentials_provider(
+            CredProviderType type);
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> get_aws_credentials_provider(
             const S3ClientConf& s3_conf);
 
@@ -170,6 +182,9 @@ private:
     std::unordered_map<uint64_t, std::shared_ptr<io::ObjStorageClient>> _cache;
     std::string _ca_cert_file_path;
     std::array<std::unique_ptr<S3RateLimiterHolder>, 2> _rate_limiters;
+#ifdef BE_TEST
+    std::function<std::shared_ptr<io::ObjStorageClient>(const S3ClientConf&)> _test_client_creator;
+#endif
 };
 
 } // end namespace doris

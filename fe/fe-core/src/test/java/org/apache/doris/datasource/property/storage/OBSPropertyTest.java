@@ -71,6 +71,7 @@ public class OBSPropertyTest {
         origProps.put("test_non_storage_param", "test_non_storage_value");
         origProps.put(StorageProperties.FS_OBS_SUPPORT, "true");
         OBSProperties obsProperties = (OBSProperties) StorageProperties.createAll(origProps).get(0);
+        Assertions.assertEquals(1, StorageProperties.createAll(origProps).size());
         Map<String, String> s3Props = new HashMap<>();
         Map<String, String> obsConfig = obsProperties.getMatchedProperties();
         Assertions.assertTrue(!obsConfig.containsKey("test_non_storage_param"));
@@ -96,13 +97,13 @@ public class OBSPropertyTest {
         Assertions.assertEquals("false", s3Props.get("use_path_style"));
     }
 
-
     @Test
     public void testGetRegion() throws UserException {
         origProps.put("obs.endpoint", "obs.cn-north-4.myhuaweicloud.com");
         origProps.put("obs.access_key", "myOBSAccessKey");
         origProps.put("obs.secret_key", "myOBSSecretKey");
-        OBSProperties obsProperties = (OBSProperties) StorageProperties.createAll(origProps).get(0);
+        OBSProperties obsProperties = (OBSProperties) StorageProperties.createAll(origProps).get(1);
+        Assertions.assertEquals(HdfsProperties.class, StorageProperties.createAll(origProps).get(0).getClass());
         Assertions.assertEquals("cn-north-4", obsProperties.getRegion());
         Assertions.assertEquals("myOBSAccessKey", obsProperties.getAccessKey());
         Assertions.assertEquals("myOBSSecretKey", obsProperties.getSecretKey());
@@ -147,10 +148,14 @@ public class OBSPropertyTest {
         props.put("obs.endpoint", "obs.cn-north-4.myhuaweicloud.com");
         OBSProperties obsStorageProperties = (OBSProperties) StorageProperties.createPrimary(props);
         Assertions.assertEquals(AnonymousCredentialsProvider.class, obsStorageProperties.getAwsCredentialsProvider().getClass());
+        Map<String, String> backendProps = obsStorageProperties.getBackendConfigProperties();
+        Assertions.assertEquals("ANONYMOUS", backendProps.get("AWS_CREDENTIALS_PROVIDER_TYPE"));
         props.put("obs.access_key", "myAccessKey");
         props.put("obs.secret_key", "mySecretKey");
         obsStorageProperties = (OBSProperties) StorageProperties.createPrimary(props);
         Assertions.assertEquals(StaticCredentialsProvider.class, obsStorageProperties.getAwsCredentialsProvider().getClass());
+        backendProps = obsStorageProperties.getBackendConfigProperties();
+        Assertions.assertNull(backendProps.get("AWS_CREDENTIALS_PROVIDER_TYPE"));
     }
 
     @Test

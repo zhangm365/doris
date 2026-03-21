@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_mysql_varbinary_with_udf", "p0,external,mysql,external_docker,external_docker_mysql") {
+suite("test_mysql_varbinary_with_udf", "p0,external") {
     String enabled = context.config.otherConfigs.get("enableJdbcTest")
     String externalEnvIp = context.config.otherConfigs.get("externalEnvIp")
     String s3_endpoint = getS3Endpoint()
@@ -31,7 +31,8 @@ suite("test_mysql_varbinary_with_udf", "p0,external,mysql,external_docker,extern
             "password"="123456",
             "jdbc_url" = "jdbc:mysql://${externalEnvIp}:${mysql_port}/doris_test?useSSL=false",
             "driver_url" = "${driver_url}",
-            "driver_class" = "com.mysql.cj.jdbc.Driver"
+            "driver_class" = "com.mysql.cj.jdbc.Driver",
+            "enable.mapping.varbinary" = "true"
         );"""
 
         sql """use mysql_varbinary_udf_catalog.test_varbinary_db"""

@@ -32,15 +32,17 @@
 #include <utility>
 
 #include "common/compiler_util.h" // IWYU pragma: keep
+#include "common/metrics/doris_metrics.h"
+#include "io/cache/block_file_cache.h"
 #include "io/fs/err_utils.h"
 #include "io/fs/obj_storage_client.h"
 #include "io/fs/s3_common.h"
+#include "runtime/runtime_profile.h"
 #include "runtime/thread_context.h"
 #include "runtime/workload_management/io_throttle.h"
 #include "util/bvar_helper.h"
+#include "util/concurrency_stats.h"
 #include "util/debug_points.h"
-#include "util/doris_metrics.h"
-#include "util/runtime_profile.h"
 #include "util/s3_util.h"
 
 namespace doris::io {
@@ -115,6 +117,9 @@ Status S3FileReader::read_at_impl(size_t offset, Slice result, size_t* bytes_rea
     size_t bytes_req = result.size;
     char* to = result.data;
     bytes_req = std::min(bytes_req, _file_size - offset);
+    VLOG_DEBUG << fmt::format("S3FileReader::read_at_impl offset={} size={} path={} hash={}",
+                              offset, result.size, _path.native(),
+                              io::BlockFileCache::hash(_path.native()).to_string());
     VLOG_DEBUG << "enter s3 read_at_impl, off=" << offset << " n=" << bytes_req
                << " req=" << result.size << " file size=" << _file_size;
     if (UNLIKELY(bytes_req == 0)) {
@@ -126,6 +131,8 @@ Status S3FileReader::read_at_impl(size_t offset, Slice result, size_t* bytes_rea
     if (!client) {
         return Status::InternalError("init s3 client error");
     }
+
+    SCOPED_CONCURRENCY_COUNT(ConcurrencyStatsManager::instance().s3_file_reader_read);
 
     int retry_count = 0;
     const int base_wait_time = config::s3_read_base_wait_time_ms; // Base wait time in milliseconds

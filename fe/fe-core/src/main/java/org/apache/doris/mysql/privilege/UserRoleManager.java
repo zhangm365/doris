@@ -18,7 +18,6 @@
 package org.apache.doris.mysql.privilege;
 
 import org.apache.doris.analysis.UserIdentity;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.persist.gson.GsonPostProcessable;
@@ -27,7 +26,7 @@ import org.apache.doris.persist.gson.GsonUtils;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.gson.annotations.SerializedName;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 
 import java.io.DataInput;
 import java.io.DataOutput;
@@ -135,7 +134,7 @@ public class UserRoleManager implements Writable, GsonPostProcessable {
             return rolesByUser;
         } else {
             return rolesByUser.stream().filter(role ->
-                    !ClusterNamespace.getNameFromFullName(role).startsWith(RoleManager.DEFAULT_ROLE_PREFIX)).collect(
+                    !role.startsWith(RoleManager.DEFAULT_ROLE_PREFIX)).collect(
                     Collectors.toSet());
         }
     }
@@ -160,21 +159,8 @@ public class UserRoleManager implements Writable, GsonPostProcessable {
         return GsonUtils.GSON.fromJson(json, UserRoleManager.class);
     }
 
-    private void removeClusterPrefix() {
-        Map<UserIdentity, Set<String>> newUserToRoles = Maps.newHashMap();
-        for (Entry<UserIdentity, Set<String>> entry : userToRoles.entrySet()) {
-            Set<String> newRoles = Sets.newHashSet();
-            for (String role : entry.getValue()) {
-                newRoles.add(ClusterNamespace.getNameFromFullName(role));
-            }
-            newUserToRoles.put(entry.getKey(), newRoles);
-        }
-        userToRoles = newUserToRoles;
-    }
-
     @Override
     public void gsonPostProcess() throws IOException {
-        removeClusterPrefix();
         roleToUsers = Maps.newHashMap();
         for (Entry<UserIdentity, Set<String>> entry : userToRoles.entrySet()) {
             for (String roleName : entry.getValue()) {

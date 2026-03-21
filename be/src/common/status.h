@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "common/compiler_util.h" // IWYU pragma: keep
@@ -522,7 +523,7 @@ public:
 
     void set_code(int code) { _code = code; }
 
-    bool ok() const { return _code == ErrorCode::OK; }
+    bool ok() const { return _code == ErrorCode::OK || _code == ErrorCode::FINISHED; }
 
     // Convert into TStatus.
     void to_thrift(TStatus* status) const;
@@ -756,6 +757,24 @@ using ResultError = unexpected<Status>;
         }                                                                                       \
         std::forward<T>(res).value();                                                           \
     })
+
+#define TEST_RESULT_ERROR(stmt)                                                                   \
+    ({                                                                                            \
+        auto&& _result_ = (stmt);                                                                 \
+        using _result_t = std::decay_t<decltype(_result_)>;                                       \
+        if (_result_.has_value()) [[unlikely]] {                                                  \
+            ASSERT_FALSE(_result_.has_value()) << "Expected ResultError, but got success result"; \
+        }                                                                                         \
+        std::forward<_result_t>(_result_).error();                                                \
+    })
+
+// core in Debug mode, exception in Release mode.
+#define DORIS_CHECK(stmt)                                                                \
+    do {                                                                                 \
+        if (!static_cast<bool>(stmt)) [[unlikely]] {                                     \
+            throw Exception(Status::FatalError(fmt::format("Check failed: {}", #stmt))); \
+        }                                                                                \
+    } while (false)
 
 } // namespace doris
 

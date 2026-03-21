@@ -21,7 +21,9 @@
 package org.apache.doris.planner;
 
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
 import org.apache.doris.analysis.SortInfo;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.common.Pair;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.thrift.TExplainLevel;
@@ -73,7 +75,6 @@ public class SortNode extends PlanNode {
         this.info = info;
         this.useTopN = useTopN;
         this.tupleIds.addAll(Lists.newArrayList(info.getSortTupleDescriptor().getId()));
-        this.nullableTupleIds.addAll(input.getNullableTupleIds());
         this.children.add(input);
         this.offset = 0;
         Preconditions.checkArgument(info.getOrderingExprs().size() == info.getIsAscOrder().size());
@@ -161,7 +162,7 @@ public class SortNode extends PlanNode {
             } else {
                 output.append(", ");
             }
-            output.append(expr.next().toSql()).append(" ");
+            output.append(expr.next().accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE)).append(" ");
             output.append(isAsc.next() ? "ASC" : "DESC");
         }
         output.append("\n");

@@ -18,13 +18,8 @@
 package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.PrimitiveType;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TIntLiteral;
 
 import com.google.common.base.Preconditions;
 import com.google.gson.annotations.SerializedName;
@@ -56,16 +51,15 @@ public class IntLiteral extends NumericLiteralExpr {
     public IntLiteral(long value) {
         super();
         init(value);
-        analysisDone();
+        this.nullable = false;
     }
 
     public IntLiteral(long longValue, Type type) throws AnalysisException {
         super();
         checkValueValid(longValue, type);
-
         this.value = longValue;
         this.type = type;
-        analysisDone();
+        this.nullable = false;
     }
 
     public IntLiteral(String value, Type type) throws AnalysisException {
@@ -80,7 +74,7 @@ public class IntLiteral extends NumericLiteralExpr {
 
         this.value = longValue;
         this.type = type;
-        analysisDone();
+        this.nullable = false;
     }
 
     protected IntLiteral(IntLiteral other) {
@@ -250,20 +244,8 @@ public class IntLiteral extends NumericLiteralExpr {
     }
 
     @Override
-    public String toSqlImpl() {
-        return getStringValue();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return getStringValue();
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.INT_LITERAL;
-        msg.int_literal = new TIntLiteral(value);
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitIntLiteral(this, context);
     }
 
     @Override

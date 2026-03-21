@@ -23,7 +23,7 @@ generate_bulk_request() {
     local data_file=$4
     local output_file=$5
 
-    // clear output file
+    # clear output file
     echo "" > "$output_file"
 
     local id=1
@@ -132,6 +132,12 @@ curl "http://${ES_7_HOST}:9200/test2_20220809" -H "Content-Type:application/json
 curl "http://${ES_7_HOST}:9200/test3_20231005" -H "Content-Type:application/json" -X PUT -d '@/mnt/scripts/index/es7_test3.json'
 # create index test_object for object type testing (empty table)
 curl "http://${ES_7_HOST}:9200/test_object" -H "Content-Type:application/json" -X PUT -d '@/mnt/scripts/index/es7_test_object.json'
+
+# create index test_flatten to test flatten type
+curl "http://${ES_7_HOST}:9200/test_flatten" -H "Content-Type:application/json" -X PUT -d '@/mnt/scripts/index/es7_test_flatten.json'
+# put data for test_flatten
+curl "http://${ES_7_HOST}:9200/test_flatten/_doc/1" -H "Content-Type:application/json" -X POST -d '@/mnt/scripts/data/test_flatten_data.json'
+
 # put data for tese1
 curl "http://${ES_7_HOST}:9200/test1/_doc/1" -H "Content-Type:application/json" -X POST -d '@/mnt/scripts/data/data1.json'
 curl "http://${ES_7_HOST}:9200/test1/_doc/2" -H "Content-Type:application/json" -X POST -d '@/mnt/scripts/data/data2.json'
@@ -167,6 +173,14 @@ generate_bulk_request "composite_type_array" "_doc" "item_" "$array_data_file" "
 curl -X POST "http://${ES_7_HOST}:9200/_bulk" --data-binary "@$bulk_request_file" -H "Content-Type: application/json"
 # put _meta for composite_type_array
 curl "http://${ES_7_HOST}:9200/composite_type_array/_mapping" -H "Content-Type:application/json" -X PUT -d "@/mnt/scripts/index/array_meta_composite_type_array.json"
+
+# create index test_keyword_array for keyword array type testing
+curl "http://${ES_7_HOST}:9200/test_keyword_array" -H "Content-Type:application/json" -X PUT -d '@/mnt/scripts/index/es7_test_keyword_array.json'
+# put data for test_keyword_array
+keyword_array_data_file="/mnt/scripts/data/test_keyword_array.json"
+keyword_array_bulk_file="/mnt/scripts/data/bulk_request_keyword_array_es7.json"
+generate_bulk_request "test_keyword_array" "_doc" "item_" "$keyword_array_data_file" "$keyword_array_bulk_file"
+curl -X POST "http://${ES_7_HOST}:9200/_bulk" --data-binary "@$keyword_array_bulk_file" -H "Content-Type: application/json"
 
 # es8
 # create index test1
@@ -210,5 +224,13 @@ generate_bulk_request "composite_type_array" "" "item_" "$array_data_file" "$bul
 curl -X POST "http://${ES_8_HOST}:9200/_bulk" --data-binary "@$bulk_request_file" -H "Content-Type: application/json"
 # put _meta for composite_type_array
 curl "http://${ES_8_HOST}:9200/composite_type_array/_mapping" -H "Content-Type:application/json" -X PUT -d "@/mnt/scripts/index/array_meta_composite_type_array.json"
+
+# create index test_keyword_array for keyword array type testing
+curl "http://${ES_8_HOST}:9200/test_keyword_array" -H "Content-Type:application/json" -X PUT -d '@/mnt/scripts/index/es7_test_keyword_array.json'
+# put data for test_keyword_array
+keyword_array_data_file="/mnt/scripts/data/test_keyword_array.json"
+keyword_array_bulk_file="/mnt/scripts/data/bulk_request_keyword_array_es8.json"
+generate_bulk_request "test_keyword_array" "" "item_" "$keyword_array_data_file" "$keyword_array_bulk_file"
+curl -X POST "http://${ES_8_HOST}:9200/_bulk" --data-binary "@$keyword_array_bulk_file" -H "Content-Type: application/json"
 
 touch /tmp/SUCCESS

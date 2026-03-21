@@ -185,6 +185,27 @@ public class JdbcMySQLClient extends JdbcClient {
         return tableSchema;
     }
 
+    @Override
+    public List<String> getPrimaryKeys(String remoteDbName, String remoteTableName) {
+        Connection conn = getConnection();
+        ResultSet rs = null;
+        List<String> primaryKeys = Lists.newArrayList();
+        try {
+            DatabaseMetaData databaseMetaData = conn.getMetaData();
+            rs = databaseMetaData.getPrimaryKeys(remoteDbName, null, remoteTableName);
+            while (rs.next()) {
+                String fieldName = rs.getString("COLUMN_NAME");
+                primaryKeys.add(fieldName);
+            }
+        } catch (SQLException e) {
+            throw new JdbcClientException("failed to get jdbc primary key info for remote table `%s.%s`: %s",
+                    remoteDbName, remoteTableName, Util.getRootCauseMessage(e));
+        } finally {
+            close(rs, conn);
+        }
+        return primaryKeys;
+    }
+
     protected String getCatalogName(Connection conn) throws SQLException {
         return null;
     }
@@ -256,7 +277,18 @@ public class JdbcMySQLClient extends JdbcClient {
                     fieldSchema.setAllowNull(true);
                 }
                 return ScalarType.createDateV2Type();
-            case "TIMESTAMP":
+            case "TIMESTAMP": {
+                int columnSize = fieldSchema.requiredColumnSize();
+                int scale = columnSize > 19 ? columnSize - 20 : 0;
+                if (scale > 6) {
+                    scale = 6;
+                }
+                if (convertDateToNull) {
+                    fieldSchema.setAllowNull(true);
+                }
+                return enableMappingTimestampTz ? ScalarType.createTimeStampTzType(scale)
+                        : ScalarType.createDatetimeV2Type(scale);
+            }
             case "DATETIME": {
                 // mysql can support microsecond
                 // use columnSize to calculate the precision of timestamp/datetime
@@ -283,9 +315,14 @@ public class JdbcMySQLClient extends JdbcClient {
                 return ScalarType.createCharType(fieldSchema.requiredColumnSize());
             case "VARCHAR":
                 return ScalarType.createVarcharType(fieldSchema.requiredColumnSize());
+            case "TINYBLOB":
+            case "BLOB":
+            case "MEDIUMBLOB":
+            case "LONGBLOB":
             case "BINARY":
             case "VARBINARY":
-                return ScalarType.createVarbinaryType(fieldSchema.requiredColumnSize());
+                return enableMappingVarbinary ? ScalarType.createVarbinaryType(fieldSchema.requiredColumnSize())
+                        : ScalarType.createStringType();
             case "BIT":
                 if (fieldSchema.requiredColumnSize() == 1) {
                     return Type.BOOLEAN;
@@ -298,10 +335,6 @@ public class JdbcMySQLClient extends JdbcClient {
             case "TEXT":
             case "MEDIUMTEXT":
             case "LONGTEXT":
-            case "TINYBLOB":
-            case "BLOB":
-            case "MEDIUMBLOB":
-            case "LONGBLOB":
             case "STRING":
             case "SET":
             case "ENUM":
@@ -400,7 +433,7 @@ public class JdbcMySQLClient extends JdbcClient {
                 return ScalarType.createDateV2Type();
             case "DATETIME":
             case "DATETIMEV2": {
-                int scale = (openParen == -1) ? 6
+                int scale = (openParen == -1) ? 0
                         : Integer.parseInt(upperType.substring(openParen + 1, upperType.length() - 1));
                 if (scale > 6) {
                     scale = 6;
@@ -421,6 +454,10 @@ public class JdbcMySQLClient extends JdbcClient {
                 return ScalarType.createHllType();
             case "BITMAP":
                 return Type.BITMAP;
+            case "QUANTILE_STATE":
+                return Type.QUANTILE_STATE;
+            case "VARBINARY":
+                return ScalarType.createVarbinaryType(fieldSchema.requiredColumnSize());
             default:
                 return Type.UNSUPPORTED;
         }

@@ -18,18 +18,15 @@
 package org.apache.doris.nereids.trees.plans.algebra;
 
 import org.apache.doris.nereids.exceptions.AnalysisException;
-import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
-import org.apache.doris.nereids.trees.expressions.VirtualSlotReference;
+import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.GroupingScalarFunction;
 import org.apache.doris.nereids.trees.plans.Plan;
-import org.apache.doris.nereids.types.BigIntType;
 import org.apache.doris.nereids.util.BitUtils;
 import org.apache.doris.nereids.util.ExpressionUtils;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -38,7 +35,6 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -64,12 +60,6 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
         ImmutableList.Builder<NamedExpression> outputBuilder
                 = ImmutableList.builderWithExpectedSize(prunedOutputs.size() + 1);
         outputBuilder.addAll(prunedOutputs);
-        for (NamedExpression output : getOutputExpressions()) {
-            Set<VirtualSlotReference> v = output.collect(VirtualSlotReference.class::isInstance);
-            if (v.stream().anyMatch(slot -> slot.getName().equals(COL_GROUPING_ID))) {
-                outputBuilder.add(output);
-            }
-        }
         // prune groupingSets, if parent operator do not need some exprs in grouping sets, we removed it.
         // this could not lead to wrong result because be repeat other columns by normal.
         ImmutableList.Builder<List<Expression>> groupingSetsBuilder
@@ -89,17 +79,6 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
 
     Repeat<CHILD_PLAN> withGroupSetsAndOutput(List<List<Expression>> groupingSets,
             List<NamedExpression> outputExpressions);
-
-    static VirtualSlotReference generateVirtualGroupingIdSlot() {
-        return new VirtualSlotReference(COL_GROUPING_ID, BigIntType.INSTANCE, Optional.empty(),
-                GroupingSetShapes::computeVirtualGroupingIdValue);
-    }
-
-    static VirtualSlotReference generateVirtualSlotByFunction(GroupingScalarFunction function) {
-        return new VirtualSlotReference(
-                generateVirtualSlotName(function), function.getDataType(), Optional.of(function),
-                function::computeVirtualSlotValue);
-    }
 
     /**
      * get common grouping set expressions.
@@ -121,44 +100,51 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
     }
 
     /**
-     * getSortedVirtualSlots: order by virtual GROUPING_ID slot first.
-     */
-    default Set<VirtualSlotReference> getSortedVirtualSlots() {
-        Set<VirtualSlotReference> virtualSlots =
-                ExpressionUtils.collect(getOutputExpressions(), VirtualSlotReference.class::isInstance);
-
-        VirtualSlotReference virtualGroupingSetIdSlot = virtualSlots.stream()
-                .filter(slot -> slot.getName().equals(COL_GROUPING_ID))
-                .findFirst()
-                .get();
-
-        return ImmutableSet.<VirtualSlotReference>builder()
-                .add(virtualGroupingSetIdSlot)
-                .addAll(Sets.difference(virtualSlots, ImmutableSet.of(virtualGroupingSetIdSlot)))
-                .build();
-    }
-
-    /**
      * computeVirtualSlotValues. backend will fill this long value to the VirtualSlotRef
      */
-    default List<List<Long>> computeVirtualSlotValues(Set<VirtualSlotReference> sortedVirtualSlots) {
+    default List<List<Long>> computeGroupingFunctionsValues() {
         GroupingSetShapes shapes = toShapes();
-
-        return sortedVirtualSlots.stream()
-                .map(virtualSlot -> virtualSlot.getComputeLongValueMethod().apply(shapes))
-                .collect(ImmutableList.toImmutableList());
+        List<GroupingScalarFunction> functions = ExpressionUtils.collectToList(
+                getOutputExpressions(), GroupingScalarFunction.class::isInstance);
+        List<List<Long>> groupingFunctionsValues = Lists.newArrayList();
+        groupingFunctionsValues.add(shapes.computeGroupingIdValue());
+        for (GroupingScalarFunction function : functions) {
+            groupingFunctionsValues.add(function.computeValue(shapes));
+        }
+        return groupingFunctionsValues;
     }
 
     /**
      * flatten the grouping sets and build to a GroupingSetShapes.
+     * This method ensures that all expressions referenced by grouping functions are included
+     * in the flattenGroupingSetExpression, even if they are not in any grouping set.
+     * This is necessary for optimization scenarios where some expressions may only exist
+     * in the maximum grouping set that was removed during optimization.
      */
     default GroupingSetShapes toShapes() {
-        Set<Expression> flattenGroupingSet = ImmutableSet.copyOf(ExpressionUtils.flatExpressions(getGroupingSets()));
+        // Collect all expressions referenced by grouping functions to ensure they are included
+        // in flattenGroupingSetExpression, even if they are not in any grouping set.
+        // This maintains semantic constraints while allowing optimization.
+        List<GroupingScalarFunction> groupingFunctions = ExpressionUtils.collectToList(
+                getOutputExpressions(), GroupingScalarFunction.class::isInstance);
+        Set<Expression> groupingFunctionArgs = Sets.newLinkedHashSet();
+        for (GroupingScalarFunction function : groupingFunctions) {
+            groupingFunctionArgs.addAll(function.getArguments());
+        }
+        // Merge grouping set expressions with grouping function arguments
+        // Use LinkedHashSet to preserve order: grouping sets first, then grouping function args
+        Set<Expression> flattenGroupingSet = Sets.newLinkedHashSet(getGroupByExpressions());
+        for (Expression arg : groupingFunctionArgs) {
+            if (!flattenGroupingSet.contains(arg)) {
+                flattenGroupingSet.add(arg);
+            }
+        }
         List<GroupingSetShape> shapes = Lists.newArrayList();
         for (List<Expression> groupingSet : getGroupingSets()) {
             List<Boolean> shouldBeErasedToNull = Lists.newArrayListWithCapacity(flattenGroupingSet.size());
-            for (Expression groupingSetExpression : flattenGroupingSet) {
-                shouldBeErasedToNull.add(!groupingSet.contains(groupingSetExpression));
+            for (Expression expression : flattenGroupingSet) {
+                // If expression is not in the current grouping set, it should be erased to null
+                shouldBeErasedToNull.add(!groupingSet.contains(expression));
             }
             shapes.add(new GroupingSetShape(shouldBeErasedToNull));
         }
@@ -174,8 +160,8 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
      *
      * return: [(4, 3), (3)]
      */
-    default List<Set<Integer>> computeRepeatSlotIdList(List<Integer> slotIdList) {
-        List<Set<Integer>> groupingSetsIndexesInOutput = getGroupingSetsIndexesInOutput();
+    default List<Set<Integer>> computeRepeatSlotIdList(List<Integer> slotIdList, List<Slot> outputSlots) {
+        List<Set<Integer>> groupingSetsIndexesInOutput = getGroupingSetsIndexesInOutput(outputSlots);
         List<Set<Integer>> repeatSlotIdList = Lists.newArrayList();
         for (Set<Integer> groupingSetIndex : groupingSetsIndexesInOutput) {
             // keep order
@@ -194,8 +180,8 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
      * e.g. groupingSets=((b, a), (a)), output=[a, b]
      * return ((1, 0), (1))
      */
-    default List<Set<Integer>> getGroupingSetsIndexesInOutput() {
-        Map<Expression, Integer> indexMap = indexesOfOutput();
+    default List<Set<Integer>> getGroupingSetsIndexesInOutput(List<Slot> outputSlots) {
+        Map<Expression, Integer> indexMap = indexesOfOutput(outputSlots);
 
         List<Set<Integer>> groupingSetsIndex = Lists.newArrayList();
         List<List<Expression>> groupingSets = getGroupingSets();
@@ -218,23 +204,22 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
     /**
      * indexesOfOutput: get the indexes which mapping from the expression to the index in the output.
      *
-     * e.g. output=[a + 1, b + 2, c]
+     * e.g. outputSlots=[a + 1, b + 2, c]
      *
      * return the map(
      *   `a + 1`: 0,
      *   `b + 2`: 1,
      *   `c`: 2
      * )
+     *
+     * Use outputSlots in physicalPlanTranslator instead of getOutputExpressions() in this method,
+     * because the outputSlots have same order with slotIdList.
      */
-    default Map<Expression, Integer> indexesOfOutput() {
+    static Map<Expression, Integer> indexesOfOutput(List<Slot> outputSlots) {
         Map<Expression, Integer> indexes = Maps.newLinkedHashMap();
-        List<NamedExpression> outputs = getOutputExpressions();
-        for (int i = 0; i < outputs.size(); i++) {
-            NamedExpression output = outputs.get(i);
+        for (int i = 0; i < outputSlots.size(); i++) {
+            NamedExpression output = outputSlots.get(i);
             indexes.put(output, i);
-            if (output instanceof Alias) {
-                indexes.put(((Alias) output).child(), i);
-            }
         }
         return indexes;
     }
@@ -258,7 +243,7 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
         }
 
         /**compute a long value that backend need to fill to the GROUPING_ID slot*/
-        public List<Long> computeVirtualGroupingIdValue() {
+        public List<Long> computeGroupingIdValue() {
             Set<Long> res = Sets.newLinkedHashSet();
             long k = (long) Math.pow(2, flattenGroupingSetExpression.size());
             for (GroupingSetShape shape : shapes) {
@@ -335,5 +320,12 @@ public interface Repeat<CHILD_PLAN extends Plan> extends Aggregate<CHILD_PLAN> {
             String shouldBeErasedToNull = StringUtils.join(this.shouldBeErasedToNull, ", ");
             return "GroupingSetShape(shouldBeErasedToNull=" + shouldBeErasedToNull + ")";
         }
+    }
+
+    /** RepeatType */
+    enum RepeatType {
+        ROLLUP,
+        CUBE,
+        GROUPING_SETS
     }
 }

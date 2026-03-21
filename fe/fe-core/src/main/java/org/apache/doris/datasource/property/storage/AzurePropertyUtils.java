@@ -17,17 +17,19 @@
 
 package org.apache.doris.datasource.property.storage;
 
+import org.apache.doris.common.Config;
 import org.apache.doris.common.UserException;
-import org.apache.doris.datasource.property.storage.exception.StoragePropertiesException;
+import org.apache.doris.foundation.property.StoragePropertiesException;
 
 import org.apache.commons.lang3.StringUtils;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 public class AzurePropertyUtils {
-
     /**
      * Validates and normalizes an Azure Blob Storage URI into a unified {@code s3://}-style format.
      * <p>
@@ -66,9 +68,70 @@ public class AzurePropertyUtils {
                 || path.startsWith("s3://"))) {
             throw new StoragePropertiesException("Unsupported Azure URI scheme: " + path);
         }
-
+        if (isOneLakeLocation(path)) {
+            return path;
+        }
         return convertToS3Style(path);
     }
+
+    private static final Pattern ONELAKE_PATTERN = Pattern.compile(
+            "abfs[s]?://([^@]+)@([^/]+)\\.dfs\\.fabric\\.microsoft\\.com(/.*)?", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isAzureBlobEndpoint(String endpointOrHost) {
+        String host = extractHost(endpointOrHost);
+        if (StringUtils.isBlank(host)) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        return matchesAnySuffix(normalizedHost, Config.azure_blob_host_suffixes);
+    }
+
+    private static boolean matchesAnySuffix(String normalizedHost, String[] suffixes) {
+        if (suffixes == null || suffixes.length == 0) {
+            return false;
+        }
+        for (String suffix : suffixes) {
+            if (matchesSuffix(normalizedHost, suffix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesSuffix(String normalizedHost, String suffix) {
+        if (StringUtils.isBlank(suffix)) {
+            return false;
+        }
+        String normalizedSuffix = suffix.trim().toLowerCase(Locale.ROOT);
+        if (!normalizedSuffix.startsWith(".")) {
+            normalizedSuffix = "." + normalizedSuffix;
+        }
+        return normalizedHost.endsWith(normalizedSuffix);
+    }
+
+    private static String extractHost(String endpointOrHost) {
+        if (StringUtils.isBlank(endpointOrHost)) {
+            return null;
+        }
+        String normalized = endpointOrHost.trim();
+        if (normalized.contains("://")) {
+            try {
+                return new URI(normalized).getHost();
+            } catch (URISyntaxException e) {
+                return null;
+            }
+        }
+        int slashIndex = normalized.indexOf('/');
+        if (slashIndex >= 0) {
+            normalized = normalized.substring(0, slashIndex);
+        }
+        int colonIndex = normalized.indexOf(':');
+        if (colonIndex >= 0) {
+            normalized = normalized.substring(0, colonIndex);
+        }
+        return normalized;
+    }
+
 
     /**
      * Converts an Azure Blob Storage URI into a unified {@code s3://<container>/<path>} format.
@@ -130,11 +193,6 @@ public class AzurePropertyUtils {
                     throw new StoragePropertiesException("Invalid Azure HTTPS URI, missing host: " + uri);
                 }
 
-                // Typical Azure Blob domain: <account>.blob.core.windows.net
-                if (!host.contains(".blob.core.windows.net")) {
-                    throw new StoragePropertiesException("Not an Azure Blob URL: " + uri);
-                }
-
                 // Path usually looks like: /<container>/<path>
                 String[] parts = path.split("/", 3);
                 if (parts.length < 2) {
@@ -180,5 +238,9 @@ public class AzurePropertyUtils {
                 .map(Map.Entry::getValue)
                 .findFirst()
                 .orElseThrow(() -> new StoragePropertiesException("Properties must contain 'uri' key"));
+    }
+
+    public static boolean isOneLakeLocation(String location) {
+        return ONELAKE_PATTERN.matcher(location).matches();
     }
 }

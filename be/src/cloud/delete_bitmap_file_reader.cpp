@@ -20,8 +20,8 @@
 #include "cloud/delete_bitmap_file_writer.h"
 #include "common/status.h"
 #include "io/fs/file_reader.h"
+#include "io/fs/packed_file_reader.h"
 #include "util/coding.h"
-#include "util/crc32c.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -29,6 +29,20 @@ namespace doris {
 DeleteBitmapFileReader::DeleteBitmapFileReader(int64_t tablet_id, const std::string& rowset_id,
                                                std::optional<StorageResource>& storage_resource)
         : _tablet_id(tablet_id), _rowset_id(rowset_id), _storage_resource(storage_resource) {}
+
+DeleteBitmapFileReader::DeleteBitmapFileReader(int64_t tablet_id, const std::string& rowset_id,
+                                               std::optional<StorageResource>& storage_resource,
+                                               const PackedSliceLocationPB& packed_location)
+        : _tablet_id(tablet_id),
+          _rowset_id(rowset_id),
+          _storage_resource(storage_resource),
+          _is_packed(true),
+          _packed_offset(packed_location.offset()),
+          _packed_size(packed_location.size()),
+          _packed_file_path(packed_location.packed_file_path()),
+          _packed_file_size(packed_location.has_packed_file_size()
+                                    ? packed_location.packed_file_size()
+                                    : -1) {}
 
 DeleteBitmapFileReader::~DeleteBitmapFileReader() = default;
 
@@ -46,9 +60,28 @@ Status DeleteBitmapFileReader::init() {
     if (!_storage_resource) {
         return Status::InternalError("invalid storage resource for tablet_id={}", _tablet_id);
     }
-    _path = _storage_resource->remote_delete_bitmap_path(_tablet_id, _rowset_id);
-    io::FileReaderOptions opts;
-    return _storage_resource->fs->open_file(_path, &_file_reader, &opts);
+
+    if (_is_packed) {
+        // Read from packed file
+        io::FileReaderSPtr inner_reader;
+        io::FileReaderOptions opts;
+        if (_packed_file_size > 0) {
+            opts.file_size = _packed_file_size;
+        }
+        opts.cache_type = io::FileCachePolicy::NO_CACHE;
+        RETURN_IF_ERROR(_storage_resource->fs->open_file(io::Path(_packed_file_path), &inner_reader,
+                                                         &opts));
+
+        _path = _storage_resource->remote_delete_bitmap_path(_tablet_id, _rowset_id);
+        _file_reader = std::make_shared<io::PackedFileReader>(
+                std::move(inner_reader), io::Path(_path), _packed_offset, _packed_size);
+    } else {
+        // Read from standalone file
+        _path = _storage_resource->remote_delete_bitmap_path(_tablet_id, _rowset_id);
+        io::FileReaderOptions opts;
+        RETURN_IF_ERROR(_storage_resource->fs->open_file(_path, &_file_reader, &opts));
+    }
+    return Status::OK();
 }
 
 Status DeleteBitmapFileReader::close() {
@@ -117,7 +150,7 @@ Status DeleteBitmapFileReader::read(DeleteBitmapPB& delete_bitmap) {
             offset, {checksum_len_buf, DeleteBitmapFileWriter::CHECKSUM_SIZE}, &bytes_read));
     offset += DeleteBitmapFileWriter::CHECKSUM_SIZE;
     uint32_t checksum = decode_fixed32_le(checksum_len_buf);
-    uint32_t computed_checksum = crc32c::Value(delete_bitmap_buf.data(), delete_bitmap_len);
+    uint32_t computed_checksum = crc32c::Crc32c(delete_bitmap_buf.data(), delete_bitmap_len);
     if (computed_checksum != checksum) {
         return Status::InternalError("delete bitmap checksum failed from file=" + _path +
                                      ", computed checksum=" + std::to_string(computed_checksum) +

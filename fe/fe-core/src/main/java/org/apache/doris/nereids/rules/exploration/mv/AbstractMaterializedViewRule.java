@@ -18,7 +18,6 @@
 package org.apache.doris.nereids.rules.exploration.mv;
 
 import org.apache.doris.catalog.MTMV;
-import org.apache.doris.catalog.constraint.TableIdentifier;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Id;
 import org.apache.doris.common.Pair;
@@ -31,6 +30,7 @@ import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.jobs.executor.Rewriter;
 import org.apache.doris.nereids.properties.LogicalProperties;
+import org.apache.doris.nereids.properties.OrderKey;
 import org.apache.doris.nereids.rules.exploration.ExplorationRuleFactory;
 import org.apache.doris.nereids.rules.exploration.mv.Predicates.ExpressionInfo;
 import org.apache.doris.nereids.rules.exploration.mv.Predicates.SplitPredicate;
@@ -54,10 +54,12 @@ import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.expressions.literal.VarcharLiteral;
 import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
+import org.apache.doris.nereids.trees.plans.TableId;
 import org.apache.doris.nereids.trees.plans.algebra.CatalogRelation;
 import org.apache.doris.nereids.trees.plans.algebra.SetOperation.Qualifier;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
 import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
 import org.apache.doris.nereids.trees.plans.visitor.DefaultPlanRewriter;
 import org.apache.doris.nereids.types.VariantType;
@@ -68,6 +70,7 @@ import org.apache.doris.statistics.Statistics;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
@@ -76,7 +79,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -102,7 +104,11 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             JoinType.RIGHT_SEMI_JOIN,
             JoinType.LEFT_ANTI_JOIN,
             JoinType.RIGHT_ANTI_JOIN,
-            JoinType.NULL_AWARE_LEFT_ANTI_JOIN);
+            JoinType.NULL_AWARE_LEFT_ANTI_JOIN,
+            JoinType.ASOF_LEFT_INNER_JOIN,
+            JoinType.ASOF_RIGHT_INNER_JOIN,
+            JoinType.ASOF_LEFT_OUTER_JOIN,
+            JoinType.ASOF_RIGHT_OUTER_JOIN);
 
     /**
      * The abstract template method for query rewrite, it contains the main logic, try to rewrite query by
@@ -125,18 +131,18 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                     statementContext.getMaterializedViewRewriteDuration());
             return rewrittenPlans;
         }
-        for (MaterializationContext context : cascadesContext.getMaterializationContexts()) {
+        for (MaterializationContext materializationContext : cascadesContext.getMaterializationContexts()) {
             statementContext.getMaterializedViewStopwatch().reset().start();
-            if (checkIfRewritten(queryPlan, context)) {
+            if (checkIfRewritten(queryPlan, materializationContext)) {
                 continue;
             }
             // check mv plan is valid or not
-            if (!isMaterializationValid(queryPlan, cascadesContext, context)) {
+            if (!isMaterializationValid(queryPlan, cascadesContext, materializationContext)) {
                 continue;
             }
             // get query struct infos according to the view strut info, if valid query struct infos is empty, bail out
             List<StructInfo> queryStructInfos = getValidQueryStructInfos(queryPlan, cascadesContext,
-                    context.getCommonTableIdSet(statementContext));
+                    materializationContext);
             if (queryStructInfos.isEmpty()) {
                 continue;
             }
@@ -160,11 +166,11 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 }
                 try {
                     if (rewrittenPlans.size() < sessionVariable.getMaterializedViewRewriteSuccessCandidateNum()) {
-                        rewrittenPlans.addAll(doRewrite(queryStructInfo, cascadesContext, context));
+                        rewrittenPlans.addAll(doRewrite(queryStructInfo, cascadesContext, materializationContext));
                     }
                 } catch (Exception exception) {
                     LOG.warn("Materialized view rule exec fail", exception);
-                    context.recordFailReason(queryStructInfo,
+                    materializationContext.recordFailReason(queryStructInfo,
                             "Materialized view rule exec fail", exception::toString);
                 } finally {
                     elapsed = statementContext.getMaterializedViewStopwatch().elapsed(TimeUnit.MILLISECONDS);
@@ -182,18 +188,18 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
      * Get valid query struct infos, if invalid record the invalid reason
      */
     protected List<StructInfo> getValidQueryStructInfos(Plan queryPlan, CascadesContext cascadesContext,
-            BitSet materializedViewTableSet) {
+            MaterializationContext materializationContext) {
         List<StructInfo> validStructInfos = new ArrayList<>();
         // For every materialized view we should trigger refreshing struct info map
-        List<StructInfo> uncheckedStructInfos = MaterializedViewUtils.extractStructInfo(queryPlan, queryPlan,
-                cascadesContext, materializedViewTableSet);
-        uncheckedStructInfos.forEach(queryStructInfo -> {
+        List<StructInfo> uncheckedQueryStructInfos = MaterializedViewUtils.extractStructInfoFuzzy(queryPlan, queryPlan,
+                cascadesContext, materializationContext.getCommonTableIdSet(cascadesContext.getStatementContext()));
+        uncheckedQueryStructInfos.forEach(queryStructInfo -> {
             boolean valid = checkQueryPattern(queryStructInfo, cascadesContext) && queryStructInfo.isValid();
             if (!valid) {
                 cascadesContext.getMaterializationContexts().forEach(ctx ->
                         ctx.recordFailReason(queryStructInfo, "Query struct info is invalid",
                                 () -> String.format("query table bitmap is %s, plan is %s",
-                                        queryStructInfo.getTableBitSet(), queryPlan.treeString())
+                                        queryStructInfo.getRelations(), queryPlan.treeString())
                         ));
             } else {
                 validStructInfos.add(queryStructInfo);
@@ -210,8 +216,9 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
             MaterializationContext materializationContext) throws AnalysisException {
         List<Plan> rewriteResults = new ArrayList<>();
         StructInfo viewStructInfo = materializationContext.getStructInfo();
-        MatchMode matchMode = decideMatchMode(queryStructInfo.getRelations(), viewStructInfo.getRelations());
-        if (MatchMode.COMPLETE != matchMode) {
+        MatchMode matchMode = decideMatchMode(queryStructInfo.getRelations(), viewStructInfo.getRelations(),
+                cascadesContext);
+        if (MatchMode.COMPLETE != matchMode && MatchMode.QUERY_PARTIAL != matchMode) {
             materializationContext.recordFailReason(queryStructInfo, "Match mode is invalid",
                     () -> String.format("matchMode is %s", matchMode));
             return rewriteResults;
@@ -273,9 +280,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 // Try to rewrite compensate predicates by using mv scan
                 List<Expression> rewriteCompensatePredicates = rewriteExpression(compensatePredicates.toList(),
                         queryPlan, materializationContext.getShuttledExprToScanExprMapping(),
-                        viewToQuerySlotMapping, queryStructInfo.getTableBitSet(),
-                        compensatePredicates.getRangePredicateMap(),
-                        cascadesContext);
+                        viewToQuerySlotMapping, compensatePredicates.getRangePredicateMap(), cascadesContext);
                 if (rewriteCompensatePredicates.isEmpty()) {
                     materializationContext.recordFailReason(queryStructInfo,
                             "Rewrite compensate predicate by view fail",
@@ -312,11 +317,11 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 continue;
             }
             Pair<Map<BaseTableInfo, Set<String>>, Map<BaseColInfo, Set<String>>> invalidPartitions;
-            if (PartitionCompensator.needUnionRewrite(materializationContext)
+            if (PartitionCompensator.needUnionRewrite(materializationContext, cascadesContext.getStatementContext())
                     && sessionVariable.isEnableMaterializedViewUnionRewrite()) {
                 MTMV mtmv = ((AsyncMaterializationContext) materializationContext).getMtmv();
                 Map<List<String>, Set<String>> queryUsedPartitions = PartitionCompensator.getQueryUsedPartitions(
-                        cascadesContext.getStatementContext(), queryStructInfo.getTableBitSet());
+                        cascadesContext.getStatementContext(), queryStructInfo.getRelationBitSet());
                 Set<MTMVRelatedTableIf> pctTables = mtmv.getMvPartitionInfo().getPctTables();
                 boolean relateTableUsedPartitionsAnyNull = false;
                 boolean relateTableUsedPartitionsAllEmpty = true;
@@ -461,10 +466,16 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                     materializationContext);
             rewriteResults.add(rewrittenPlan);
             recordIfRewritten(queryStructInfo.getOriginalPlan(), materializationContext, cascadesContext);
-            // If rewrite successfully, try to clear mv scan currently because it maybe used again
-            materializationContext.clearScanPlan(cascadesContext);
+            resetMaterializationContext(materializationContext, cascadesContext);
         }
         return rewriteResults;
+    }
+
+    // reset some materialization context state after one materialized view written successfully
+    private void resetMaterializationContext(MaterializationContext currentContext,
+                                             CascadesContext cascadesContext) {
+        // If rewrite successfully, try to clear mv scan currently because it maybe used again
+        currentContext.clearScanPlan(cascadesContext);
     }
 
     // Set materialization context statistics to statementContext for cost estimate later
@@ -549,51 +560,6 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
     }
 
     /**
-     * Derive the operative column for materialized view scan, if the operative column in query can be
-     * represented by the operative column in materialized view, then set the operative column in
-     * materialized view scan, otherwise return the materialized view scan without operative column
-     */
-    private static Plan deriveOperativeColumn(Plan rewrittenPlan, StructInfo queryStructInfo,
-            ExpressionMapping targetExpressionMapping, SlotMapping targetToSourceMapping,
-            MaterializationContext materializationContext) {
-        ExpressionMapping expressionMappingKeySourceBased = targetExpressionMapping.keyPermute(targetToSourceMapping);
-        // target to target replacement expression mapping, because mv is 1:1 so get first element
-        List<Map<Expression, Expression>> flattenExpressionMap = expressionMappingKeySourceBased.flattenMap();
-        Map<Expression, Expression> targetToTargetReplacementMappingQueryBased =
-                flattenExpressionMap.get(0);
-        final Multimap<NamedExpression, Slot> slotMapping = ArrayListMultimap.create();
-        for (Map.Entry<Expression, Expression> entry : targetToTargetReplacementMappingQueryBased.entrySet()) {
-            if (entry.getValue() instanceof Slot) {
-                entry.getKey().collect(NamedExpression.class::isInstance).forEach(
-                        namedExpression -> slotMapping.put(
-                                (NamedExpression) namedExpression, (Slot) entry.getValue()));
-            }
-        }
-        Set<Slot> operativeSlots = new HashSet<>();
-        for (CatalogRelation relation : queryStructInfo.getRelations()) {
-            List<Slot> relationOperativeSlots = relation.getOperativeSlots();
-            if (relationOperativeSlots.isEmpty()) {
-                continue;
-            }
-            for (Slot slot : relationOperativeSlots) {
-                Collection<Slot> mvOutputSlots = slotMapping.get(slot);
-                if (!mvOutputSlots.isEmpty()) {
-                    operativeSlots.addAll(mvOutputSlots);
-                }
-            }
-        }
-        return rewrittenPlan.accept(new DefaultPlanRewriter<MaterializationContext>() {
-            @Override
-            public Plan visitLogicalOlapScan(LogicalOlapScan olapScan, MaterializationContext context) {
-                if (context.generateMaterializationIdentifier().equals(olapScan.getTable().getFullQualifiers())) {
-                    return olapScan.withOperativeSlots(operativeSlots);
-                }
-                return super.visitLogicalOlapScan(olapScan, context);
-            }
-        }, materializationContext);
-    }
-
-    /**
      * Use target expression to represent the source expression. Visit the source expression,
      * try to replace the source expression with target expression in targetExpressionMapping, if found then
      * replace the source expression by target expression mapping value.
@@ -604,16 +570,16 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
      *         then use the corresponding value of mapping to replace it
      */
     protected List<Expression> rewriteExpression(List<? extends Expression> sourceExpressionsToWrite, Plan sourcePlan,
-            ExpressionMapping targetExpressionMapping, SlotMapping targetToSourceMapping, BitSet sourcePlanBitSet,
+            ExpressionMapping targetExpressionMapping, SlotMapping targetToSourceMapping,
             Map<Expression, ExpressionInfo> queryExprToInfoMap, CascadesContext cascadesContext) {
         // Firstly, rewrite the target expression using source with inverse mapping
         // then try to use the target expression to represent the query. if any of source expressions
-        // can not be represented by target expressions, return null.
+        // could not be represented by target expressions, return null.
         // generate target to target replacement expression mapping, and change target expression to source based
         List<? extends Expression> sourceShuttledExpressions = ExpressionUtils.shuttleExpressionWithLineage(
-                sourceExpressionsToWrite, sourcePlan, sourcePlanBitSet);
+                sourceExpressionsToWrite, sourcePlan);
         ExpressionMapping expressionMappingKeySourceBased = targetExpressionMapping.keyPermute(targetToSourceMapping);
-        // target to target replacement expression mapping, because mv is 1:1 so get first element
+        // target to target replacement expression mapping, because mv is 1:1 so get the first element
         List<Map<Expression, Expression>> flattenExpressionMap = expressionMappingKeySourceBased.flattenMap();
         Map<Expression, Expression> targetToTargetReplacementMappingQueryBased =
                 flattenExpressionMap.get(0);
@@ -644,7 +610,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                     targetToTargetReplacementMappingQueryBased);
             Set<Expression> replacedExpressionSlotQueryUsed = replacedExpression.collect(slotsToRewrite::contains);
             if (!replacedExpressionSlotQueryUsed.isEmpty()) {
-                // if contains any slot to rewrite, which means can not be rewritten by target,
+                // if contains any slot to rewrite, which means could not be rewritten by target,
                 // expressionShuttledToRewrite is slot#0 > '2024-01-01' but mv plan output is date_trunc(slot#0, 'day')
                 // which would try to rewrite
                 if (viewExprParamToDateTruncMap.isEmpty()
@@ -659,7 +625,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                 if (!queryExprToInfoMap.containsKey(queryOriginalExpr)
                         || !viewExprParamToDateTruncMap.containsKey(queryShuttledExprParam)) {
                     // query expr contains expression info or mv out contains date_trunc expression,
-                    // if not, can not try to rewritten by view date_trunc, bail out
+                    // if not, could not try to be rewritten by view date_trunc, bail out
                     return ImmutableList.of();
                 }
                 Map<Expression, Expression> datetruncMap = new HashMap<>();
@@ -692,7 +658,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
     }
 
     /**
-     * if query contains variant slot reference, extend the expression mapping for rewrte
+     * if query contains variant slot reference, extend the expression mapping for rewrite
      * such as targetToTargetReplacementMappingQueryBased is
      * id#0 -> id#8
      * type#1 -> type#9
@@ -751,6 +717,51 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
                         constructElementAt(minExpr, minCompensateName));
             }
         }
+    }
+
+    /**
+     * Derive the operative column for materialized view scan, if the operative column in query can be
+     * represented by the operative column in materialized view, then set the operative column in
+     * materialized view scan, otherwise return the materialized view scan without operative column
+     */
+    private static Plan deriveOperativeColumn(Plan rewrittenPlan, StructInfo queryStructInfo,
+            ExpressionMapping targetExpressionMapping, SlotMapping targetToSourceMapping,
+            MaterializationContext materializationContext) {
+        ExpressionMapping expressionMappingKeySourceBased = targetExpressionMapping.keyPermute(targetToSourceMapping);
+        // target to target replacement expression mapping, because mv is 1:1 so get first element
+        List<Map<Expression, Expression>> flattenExpressionMap = expressionMappingKeySourceBased.flattenMap();
+        Map<Expression, Expression> targetToTargetReplacementMappingQueryBased =
+                flattenExpressionMap.get(0);
+        final Multimap<NamedExpression, Slot> slotMapping = ArrayListMultimap.create();
+        for (Map.Entry<Expression, Expression> entry : targetToTargetReplacementMappingQueryBased.entrySet()) {
+            if (entry.getValue() instanceof Slot) {
+                entry.getKey().collect(NamedExpression.class::isInstance).forEach(
+                        namedExpression -> slotMapping.put(
+                                (NamedExpression) namedExpression, (Slot) entry.getValue()));
+            }
+        }
+        Set<Slot> operativeSlots = new HashSet<>();
+        for (CatalogRelation relation : queryStructInfo.getRelations()) {
+            List<Slot> relationOperativeSlots = relation.getOperativeSlots();
+            if (relationOperativeSlots.isEmpty()) {
+                continue;
+            }
+            for (Slot slot : relationOperativeSlots) {
+                Collection<Slot> mvOutputSlots = slotMapping.get(slot);
+                if (!mvOutputSlots.isEmpty()) {
+                    operativeSlots.addAll(mvOutputSlots);
+                }
+            }
+        }
+        return rewrittenPlan.accept(new DefaultPlanRewriter<MaterializationContext>() {
+            @Override
+            public Plan visitLogicalOlapScan(LogicalOlapScan olapScan, MaterializationContext context) {
+                if (context.generateMaterializationIdentifier().equals(olapScan.getTable().getFullQualifiers())) {
+                    return olapScan.withOperativeSlots(operativeSlots);
+                }
+                return super.visitLogicalOlapScan(olapScan, context);
+            }
+        }, materializationContext);
     }
 
     private static Expression constructElementAt(Expression target, List<String> atList) {
@@ -888,7 +899,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         }
         // query slot need shuttle to use table slot, avoid alias influence
         Set<Expression> queryUsedNeedRejectNullSlotsViewBased = ExpressionUtils.shuttleExpressionWithLineage(
-                        new ArrayList<>(queryNullRejectSlotSet), queryStructInfo.getTopPlan(), new BitSet()).stream()
+                        new ArrayList<>(queryNullRejectSlotSet), queryStructInfo.getTopPlan()).stream()
                 .map(expr -> ExpressionUtils.replace(expr, queryToViewMapping.toSlotReferenceMap()))
                 .collect(Collectors.toSet());
         // view slot need shuttle to use table slot, avoid alias influence
@@ -896,7 +907,7 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
         for (Set<Slot> requireNullableSlots : requireNoNullableViewSlot) {
             shuttledRequireNoNullableViewSlot.add(
                     ExpressionUtils.shuttleExpressionWithLineage(new ArrayList<>(requireNullableSlots),
-                                    viewStructInfo.getTopPlan(), new BitSet()).stream().map(Slot.class::cast)
+                                    viewStructInfo.getTopPlan()).stream().map(Slot.class::cast)
                             .collect(Collectors.toSet()));
         }
         // query pulledUp predicates should have null reject predicates and contains any require noNullable slot
@@ -909,15 +920,15 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
      *
      * @see MatchMode
      */
-    private MatchMode decideMatchMode(List<CatalogRelation> queryRelations, List<CatalogRelation> viewRelations) {
-
-        Set<TableIdentifier> queryTables = new HashSet<>();
+    private MatchMode decideMatchMode(List<CatalogRelation> queryRelations, List<CatalogRelation> viewRelations,
+            CascadesContext cascadesContext) {
+        Set<TableId> queryTables = new HashSet<>();
         for (CatalogRelation catalogRelation : queryRelations) {
-            queryTables.add(new TableIdentifier(catalogRelation.getTable()));
+            queryTables.add(cascadesContext.getStatementContext().getTableId(catalogRelation.getTable()));
         }
-        Set<TableIdentifier> viewTables = new HashSet<>();
+        Set<TableId> viewTables = new HashSet<>();
         for (CatalogRelation catalogRelation : viewRelations) {
-            viewTables.add(new TableIdentifier(catalogRelation.getTable()));
+            viewTables.add(cascadesContext.getStatementContext().getTableId(catalogRelation.getTable()));
         }
         if (queryTables.equals(viewTables)) {
             return MatchMode.COMPLETE;
@@ -1033,5 +1044,91 @@ public abstract class AbstractMaterializedViewRule implements ExplorationRuleFac
          * Except for COMPLETE and VIEW_PARTIAL and QUERY_PARTIAL
          */
         NOT_MATCH
+    }
+
+    /**
+     * Try rewrite topN node
+     */
+    protected Plan tryRewriteTopN(LogicalTopN<Plan> queryTopNode, LogicalTopN<Plan> viewTopNode,
+            SlotMapping viewToQuerySlotMapping, Plan tmpRwritePlan, StructInfo queryStructInfo,
+            StructInfo viewStructInfo, MaterializationContext materializationContext, CascadesContext cascadesContext) {
+        if (queryTopNode == null || viewTopNode == null) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query topN rewrite fail, queryLimitNode or viewLimitNode is null",
+                    () -> String.format("queryTopNode = %s,\n viewTopNode = %s,\n",
+                            queryTopNode, viewTopNode));
+            return null;
+        }
+        Pair<Long, Long> limitAndOffset = AbstractMaterializedViewLimitOrTopNRule.rewriteLimitAndOffset(
+                Pair.of(queryTopNode.getLimit(), queryTopNode.getOffset()),
+                Pair.of(viewTopNode.getLimit(), viewTopNode.getOffset()));
+        if (limitAndOffset == null) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query topN limit and offset rewrite fail, query topN is not consistent with view topN",
+                    () -> String.format("query topN = %s,\n view topN = %s,\n",
+                            queryTopNode.treeString(),
+                            viewTopNode.treeString()));
+            return null;
+        }
+        // check the order keys of TopN between query and view is consistent
+        List<OrderKey> queryOrderKeys = queryTopNode.getOrderKeys();
+        List<OrderKey> viewOrderKeys = viewTopNode.getOrderKeys();
+        if (queryOrderKeys.size() > viewOrderKeys.size()) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query topN order keys size is bigger than view topN order keys size",
+                    () -> String.format("query topN order keys = %s,\n view topN order keys = %s,\n",
+                            queryOrderKeys, viewOrderKeys));
+            return null;
+        }
+        List<Expression> queryOrderKeysExpressions = queryOrderKeys.stream()
+                .map(OrderKey::getExpr).collect(Collectors.toList());
+        List<? extends Expression> queryOrderByExpressionsShuttled = ExpressionUtils.shuttleExpressionWithLineage(
+                queryOrderKeysExpressions, queryStructInfo.getTopPlan());
+
+        List<OrderKey> queryShuttledOrderKeys = new ArrayList<>();
+        for (int i = 0; i < queryOrderKeys.size(); i++) {
+            OrderKey queryOrderKey = queryOrderKeys.get(i);
+            queryShuttledOrderKeys.add(new OrderKey(queryOrderByExpressionsShuttled.get(i), queryOrderKey.isAsc(),
+                    queryOrderKey.isNullFirst()));
+        }
+        List<OrderKey> viewShuttledOrderKeys = new ArrayList<>();
+        List<? extends Expression> viewOrderByExpressionsShuttled = ExpressionUtils.shuttleExpressionWithLineage(
+                viewOrderKeys.stream().map(OrderKey::getExpr).collect(Collectors.toList()),
+                viewStructInfo.getTopPlan());
+        List<Expression> viewOrderByExpressionsQueryBasedSet = ExpressionUtils.replace(
+                viewOrderByExpressionsShuttled.stream().map(Expression.class::cast).collect(Collectors.toList()),
+                viewToQuerySlotMapping.toSlotReferenceMap());
+        for (int j = 0; j < viewOrderKeys.size(); j++) {
+            OrderKey viewOrderKey = viewOrderKeys.get(j);
+            viewShuttledOrderKeys.add(new OrderKey(viewOrderByExpressionsQueryBasedSet.get(j), viewOrderKey.isAsc(),
+                    viewOrderKey.isNullFirst()));
+        }
+        if (!MaterializedViewUtils.isPrefixSameFromStart(queryShuttledOrderKeys, viewShuttledOrderKeys)) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "view topN order key doesn't match query order key",
+                    () -> String.format("queryShuttledOrderKeys = %s,\n viewShuttledOrderKeys = %s,\n",
+                            queryShuttledOrderKeys, viewShuttledOrderKeys));
+            return null;
+        }
+
+        // try to rewrite the order by expressions using the mv scan slot
+        List<Expression> rewrittenExpressions = rewriteExpression(queryOrderKeysExpressions,
+                queryStructInfo.getTopPlan(), materializationContext.shuttledExprToScanExprMapping,
+                viewToQuerySlotMapping, ImmutableMap.of(), cascadesContext);
+        if (rewrittenExpressions.isEmpty()) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "query topN order keys rewrite fail, query topN order keys is not consistent "
+                            + "with view topN order keys",
+                    () -> String.format("query topN order keys = %s,\n shuttledExprToScanExprMapping = %s,\n",
+                            queryOrderKeysExpressions, materializationContext.shuttledExprToScanExprMapping));
+            return null;
+        }
+        List<OrderKey> rewrittenOrderKeys = new ArrayList<>();
+        for (int i = 0; i < rewrittenExpressions.size(); i++) {
+            OrderKey queryOrderKey = queryOrderKeys.get(i);
+            rewrittenOrderKeys.add(new OrderKey(rewrittenExpressions.get(i), queryOrderKey.isAsc(),
+                    queryOrderKey.isNullFirst()));
+        }
+        return new LogicalTopN<>(rewrittenOrderKeys, limitAndOffset.key(), limitAndOffset.value(), tmpRwritePlan);
     }
 }

@@ -17,11 +17,7 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
 
 import com.google.gson.annotations.SerializedName;
 
@@ -41,13 +37,14 @@ public class LambdaFunctionExpr extends Expr {
     }
 
     // for Nereids
-    public LambdaFunctionExpr(Expr lambdaBody, List<String> argNames, List<Expr> slotExprs) {
+    public LambdaFunctionExpr(Expr lambdaBody, List<String> argNames, List<Expr> slotExprs, boolean nullable) {
         this.slotExprs.add(lambdaBody);
         this.slotExprs.addAll(slotExprs);
         this.names.addAll(argNames);
         this.params.addAll(slotExprs);
         this.children.add(lambdaBody);
         this.setType(Type.LAMBDA_FUNCTION);
+        this.nullable = nullable;
     }
 
     public LambdaFunctionExpr(LambdaFunctionExpr rhs) {
@@ -57,61 +54,25 @@ public class LambdaFunctionExpr extends Expr {
         this.params.addAll(rhs.params);
     }
 
-    @Override
-    protected String toSqlImpl() {
-        String nameStr = "";
-        Expr lambdaExpr = slotExprs.get(0);
-        int exprSize = names.size();
-        for (int i = 0; i < exprSize; ++i) {
-            nameStr = nameStr + names.get(i);
-            if (i != exprSize - 1) {
-                nameStr = nameStr + ",";
-            }
-        }
-        if (exprSize > 1) {
-            nameStr = "(" + nameStr + ")";
-        }
-        String res = String.format("%s -> %s", nameStr, lambdaExpr.toSql());
-        return res;
+    public ArrayList<String> getNames() {
+        return names;
+    }
+
+    public ArrayList<Expr> getSlotExprs() {
+        return slotExprs;
+    }
+
+    public ArrayList<Expr> getParams() {
+        return params;
     }
 
     @Override
-    protected String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        String nameStr = "";
-        Expr lambdaExpr = slotExprs.get(0);
-        int exprSize = names.size();
-        for (int i = 0; i < exprSize; ++i) {
-            nameStr = nameStr + names.get(i);
-            if (i != exprSize - 1) {
-                nameStr = nameStr + ",";
-            }
-        }
-        if (exprSize > 1) {
-            nameStr = "(" + nameStr + ")";
-        }
-        String res = String.format("%s -> %s", nameStr,
-                lambdaExpr.toSql(disableTableName, needExternalSql, tableType, table));
-        return res;
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.setNodeType(TExprNodeType.LAMBDA_FUNCTION_EXPR);
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitLambdaFunctionExpr(this, context);
     }
 
     @Override
     public Expr clone() {
         return new LambdaFunctionExpr(this);
-    }
-
-    @Override
-    public boolean isNullable() {
-        for (int i = 1; i < slotExprs.size(); ++i) {
-            if (slotExprs.get(i).isNullable()) {
-                return true;
-            }
-        }
-        return false;
     }
 }

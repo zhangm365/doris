@@ -237,6 +237,29 @@ suite("condition_cache") {
         JOIN ${joinTableName} t2 ON t1.id = t2.id
         WHERE t1.age > 25 AND t2.salary > 90000
     """
+    
+       // Run the same join query with condition cache enabled and expr in bloom filter 
+        order_qt_join_bf_cache1 """
+        SELECT
+            t1.id,
+            t1.name,
+            t1.age,
+            t2.department,
+            t2.position
+        FROM ${tableName} t1
+        JOIN ${joinTableName} t2 ON t1.id + 10 = t2.id
+    """
+   // Run the same join query with condition cache enabled and expr different in bloom filter
+        order_qt_join_bf_cache2 """
+        SELECT
+            t1.id,
+            t1.name,
+            t1.age,
+            t2.department,
+            t2.position
+        FROM ${tableName} t1
+        JOIN ${joinTableName} t2 ON t1.id + 1 = t2.id
+    """
 
     sql "set runtime_filter_type=12"
 
@@ -280,11 +303,52 @@ suite("condition_cache") {
         JOIN ${joinTableName} t2 ON t1.id = t2.id
         WHERE t1.age > 25 AND t2.salary > 90000
     """
+
+        // Test cast precision difference
+        // 1. Create table
+        sql """DROP TABLE IF EXISTS test_cast_diff"""
+        sql """
+        CREATE TABLE test_cast_diff (
+            `id` int NULL,
+            `ts` datetime(6) NULL
+        ) ENGINE=OLAP
+        DUPLICATE KEY(`id`)
+        DISTRIBUTED BY HASH(`id`) BUCKETS 1
+        PROPERTIES (
+            "replication_allocation" = "tag.location.default: 1"
+        )
+        """
+
+        // 2. Insert test data (excluding id=5 to focus on subtle rounding differences)
+        sql """
+        INSERT INTO test_cast_diff VALUES
+            (1, '2025-01-01 12:00:00.123449'),
+            (2, '2025-01-01 12:00:00.123450'),
+            (3, '2025-01-01 12:00:00.123455'),
+            (4, '2025-01-01 12:00:00.123499')
+        """
+
+        // 3. Query A: cast to DATETIME(5) and compare with a 5-digit fractional constant
+        order_qt_cast_diff1 """
+        SELECT
+            'Query A' AS type,
+            id,
+            ts
+        FROM test_cast_diff
+        WHERE CAST(ts AS DATETIME(5)) = '2025-01-01 12:00:00.12350'
+        """
+
+        // 4. Query B: cast to DATETIME(3) but use the same constant string
+        // Note: the constant will be implicitly rounded to 3-digit precision (.124)
+        order_qt_cast_diff2 """
+        SELECT
+            'Query B' AS type,
+            id,
+            ts
+        FROM test_cast_diff
+        WHERE CAST(ts AS DATETIME(3)) = '2025-01-01 12:00:00.12350'
+        """
     }
 
-    sql "set enable_nereids_distribute_planner=false"
-    test()
-
-    sql "set enable_nereids_distribute_planner=true"
     test()
 }

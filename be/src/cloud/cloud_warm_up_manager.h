@@ -18,6 +18,7 @@
 #pragma once
 
 #include <bthread/countdown_event.h>
+#include <gen_cpp/BackendService.h>
 
 #include <condition_variable>
 #include <deque>
@@ -29,7 +30,6 @@
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "common/status.h"
-#include "gen_cpp/BackendService.h"
 #include "util/threadpool.h"
 
 namespace doris {
@@ -98,6 +98,8 @@ public:
     std::unordered_map<int64_t, std::pair<std::string, int32_t>> get_all_balanced_tablets() const;
 
 private:
+    void schedule_remove_balanced_tablet(int64_t tablet_id);
+    static void clean_up_expired_mappings(void* arg);
     void handle_jobs();
 
     Status _do_warm_up_rowset(RowsetMeta& rs_meta, std::vector<TReplicaInfo>& replicas,

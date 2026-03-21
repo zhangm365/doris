@@ -26,6 +26,7 @@ import com.google.common.collect.ImmutableList;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,7 +36,7 @@ import java.util.stream.Collectors;
  * Struct type in Nereids.
  */
 @Developing
-public class StructType extends DataType implements ComplexDataType {
+public class StructType extends DataType implements ComplexDataType, NestedColumnPrunable {
 
     public static final StructType SYSTEM_DEFAULT = new StructType();
 
@@ -55,7 +56,8 @@ public class StructType extends DataType implements ComplexDataType {
     public StructType(List<StructField> fields) {
         this.fields = ImmutableList.copyOf(Objects.requireNonNull(fields, "fields should not be null"));
         // field name should be lowercase and check the same or not
-        this.nameToFields = new HashMap<>();
+        // ATTN: should use LinkedHashMap to keep order
+        this.nameToFields = new LinkedHashMap<>();
         for (StructField field : this.fields) {
             String fieldName = field.getName().toLowerCase();
             StructField existingField = this.nameToFields.put(fieldName, field);
@@ -71,6 +73,10 @@ public class StructType extends DataType implements ComplexDataType {
 
     public Map<String, StructField> getNameToFields() {
         return nameToFields;
+    }
+
+    public StructField getField(String name) {
+        return nameToFields.get(name.toLowerCase());
     }
 
     @Override
@@ -108,6 +114,30 @@ public class StructType extends DataType implements ComplexDataType {
         }
         StructType that = (StructType) o;
         return Objects.equals(fields, that.fields);
+    }
+
+    @Override
+    public boolean equalsForRecursiveCte(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        if (!super.equals(o)) {
+            return false;
+        }
+        StructType other = (StructType) o;
+        if (fields.size() != other.fields.size()) {
+            return false;
+        }
+        for (int i = 0; i < fields.size(); ++i) {
+            if ((fields.get(i).isNullable() != other.fields.get(i).isNullable())
+                    || !fields.get(i).getDataType().equalsForRecursiveCte(other.fields.get(i).getDataType())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

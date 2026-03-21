@@ -22,7 +22,10 @@ package org.apache.doris.planner;
 
 import org.apache.doris.analysis.AnalyticWindow;
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
+import org.apache.doris.analysis.ExprToThriftVisitor;
 import org.apache.doris.analysis.OrderByElement;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.thrift.TAnalyticNode;
 import org.apache.doris.thrift.TExplainLevel;
@@ -32,7 +35,6 @@ import org.apache.doris.thrift.TPlanNodeType;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
 
 import java.util.List;
 
@@ -46,18 +48,12 @@ public class AnalyticEvalNode extends PlanNode {
     // Partitioning exprs from the AnalyticInfo
     private final List<Expr> partitionExprs;
 
-    // TODO: Remove when the BE uses partitionByLessThan rather than the exprs
-    private List<Expr> substitutedPartitionExprs;
     private List<OrderByElement> orderByElements;
 
     private final AnalyticWindow analyticWindow;
 
     // Physical tuples used/produced by this analytic node.
     private final TupleDescriptor outputTupleDesc;
-    // predicates constructed from partitionExprs_/orderingExprs_ to
-    // compare input to buffered tuples
-    private final Expr partitionByEq;
-    private final Expr orderByEq;
 
     private boolean isColocate = false;
 
@@ -65,22 +61,17 @@ public class AnalyticEvalNode extends PlanNode {
     public AnalyticEvalNode(
             PlanNodeId id, PlanNode input, List<Expr> analyticFnCalls,
             List<Expr> partitionExprs, List<OrderByElement> orderByElements,
-            AnalyticWindow analyticWindow, TupleDescriptor outputTupleDesc,
-            Expr partitionByEq, Expr orderByEq) {
+            AnalyticWindow analyticWindow, TupleDescriptor outputTupleDesc) {
         super(id, input.getOutputTupleIds(), "ANALYTIC");
         Preconditions.checkState(!tupleIds.contains(outputTupleDesc.getId()));
         // we're materializing the input row augmented with the analytic output tuple
         tupleIds.add(outputTupleDesc.getId());
         this.analyticFnCalls = analyticFnCalls;
         this.partitionExprs = partitionExprs;
-        this.substitutedPartitionExprs = partitionExprs;
         this.orderByElements = orderByElements;
         this.analyticWindow = analyticWindow;
         this.outputTupleDesc = outputTupleDesc;
-        this.partitionByEq = partitionByEq;
-        this.orderByEq = orderByEq;
         children.add(input);
-        nullableTupleIds = Sets.newHashSet(input.getNullableTupleIds());
     }
 
     public void setColocate(boolean colocate) {
@@ -93,20 +84,13 @@ public class AnalyticEvalNode extends PlanNode {
         msg.analytic_node = new TAnalyticNode();
         msg.analytic_node.setIntermediateTupleId(outputTupleDesc.getId().asInt());
         msg.analytic_node.setOutputTupleId(outputTupleDesc.getId().asInt());
-        msg.analytic_node.setPartitionExprs(Expr.treesToThrift(substitutedPartitionExprs));
-        msg.analytic_node.setOrderByExprs(Expr.treesToThrift(OrderByElement.getOrderByExprs(orderByElements)));
-        msg.analytic_node.setAnalyticFunctions(Expr.treesToThrift(analyticFnCalls));
+        msg.analytic_node.setPartitionExprs(ExprToThriftVisitor.treesToThrift(partitionExprs));
+        msg.analytic_node.setOrderByExprs(
+                ExprToThriftVisitor.treesToThrift(OrderByElement.getOrderByExprs(orderByElements)));
+        msg.analytic_node.setAnalyticFunctions(ExprToThriftVisitor.treesToThrift(analyticFnCalls));
         msg.analytic_node.setIsColocate(isColocate);
         // TODO: Window boundaries should have range_offset_predicate set
         msg.analytic_node.setWindow(analyticWindow.toThrift());
-
-        if (partitionByEq != null) {
-            msg.analytic_node.setPartitionByEq(partitionByEq.treeToThrift());
-        }
-
-        if (orderByEq != null) {
-            msg.analytic_node.setOrderByEq(orderByEq.treeToThrift());
-        }
     }
 
     @Override
@@ -119,7 +103,7 @@ public class AnalyticEvalNode extends PlanNode {
         List<String> strings = Lists.newArrayList();
 
         for (Expr fnCall : analyticFnCalls) {
-            strings.add("[" + fnCall.toSql() + "]");
+            strings.add("[" + fnCall.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE) + "]");
         }
 
         output.append(Joiner.on(", ").join(strings));
@@ -130,7 +114,7 @@ public class AnalyticEvalNode extends PlanNode {
             strings.clear();
 
             for (Expr partitionExpr : partitionExprs) {
-                strings.add(partitionExpr.toSql());
+                strings.add(partitionExpr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
             }
 
             output.append(Joiner.on(", ").join(strings));

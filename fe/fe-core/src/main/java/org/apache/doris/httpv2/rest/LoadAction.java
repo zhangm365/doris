@@ -23,13 +23,11 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.cloud.qe.ComputeGroupException;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.LoadException;
 import org.apache.doris.common.Pair;
-import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.httpv2.entity.ResponseEntityBuilder;
 import org.apache.doris.httpv2.entity.RestBaseResult;
@@ -200,9 +198,8 @@ public class LoadAction extends RestBaseController {
     }
 
     private boolean isGroupCommitBlock(String db, String table) throws TException {
-        String fullDbName = getFullDbName(db);
         Database dbObj = Env.getCurrentInternalCatalog()
-                .getDbOrException(fullDbName, s -> new TException("database is invalid for dbName: " + s));
+                .getDbOrException(db, s -> new TException("database is invalid for dbName: " + s));
         Table tblObj = dbObj.getTableOrException(table, s -> new TException("table is invalid: " + s));
         return Env.getCurrentEnv().getGroupCommitManager().isBlock(tblObj.getId());
     }
@@ -595,18 +592,6 @@ public class LoadAction extends RestBaseController {
     // AuditlogPlugin should be re-disigned carefully, and blow method focuses on
     // temporarily addressing the users' needs for audit logs.
     // So this function is not widely tested under general scenario
-    private boolean checkClusterToken(String token) {
-        try {
-            return Env.getCurrentEnv().getTokenManager().checkAuthToken(token);
-        } catch (UserException e) {
-            throw new UnauthorizedException(e.getMessage());
-        }
-    }
-
-    // NOTE: This function can only be used for AuditlogPlugin stream load for now.
-    // AuditlogPlugin should be re-disigned carefully, and blow method focuses on
-    // temporarily addressing the users' needs for audit logs.
-    // So this function is not widely tested under general scenario
     private Object executeWithClusterToken(HttpServletRequest request, String db,
             String table, boolean isStreamLoad) {
         try {
@@ -752,8 +737,7 @@ public class LoadAction extends RestBaseController {
 
         if (!Strings.isNullOrEmpty(request.getHeader("Authorization"))) {
             ActionAuthorizationInfo authInfo = getAuthorizationInfo(request);
-            userInfo = ClusterNamespace.getNameFromFullName(authInfo.fullUserName)
-                    + ":" + authInfo.password;
+            userInfo = authInfo.fullUserName + ":" + authInfo.password;
         }
         try {
             urlObj = new URI(urlStr);

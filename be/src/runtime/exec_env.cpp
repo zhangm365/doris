@@ -25,17 +25,17 @@
 
 #include "common/config.h"
 #include "common/logging.h"
-#include "olap/olap_define.h"
-#include "olap/storage_engine.h"
-#include "olap/tablet_manager.h"
+#include "exec/exchange/vdata_stream_mgr.h"
+#include "exec/sink/delta_writer_v2_pool.h"
+#include "exec/sink/load_stream_map_pool.h"
+#include "load/channel/load_stream_mgr.h"
 #include "runtime/fragment_mgr.h"
 #include "runtime/frontend_info.h"
-#include "runtime/load_stream_mgr.h"
+#include "storage/olap_define.h"
+#include "storage/storage_engine.h"
+#include "storage/tablet/tablet_manager.h"
 #include "util/debug_util.h"
 #include "util/time.h"
-#include "vec/runtime/vdata_stream_mgr.h"
-#include "vec/sink/delta_writer_v2_pool.h"
-#include "vec/sink/load_stream_map_pool.h"
 
 namespace doris {
 
@@ -53,11 +53,21 @@ void ExecEnv::set_write_cooldown_meta_executors() {
 #endif // BE_TEST
 
 Result<BaseTabletSPtr> ExecEnv::get_tablet(int64_t tablet_id, SyncRowsetStats* sync_stats,
-                                           bool force_use_cache) {
+                                           bool force_use_only_cached, bool cache_on_miss) {
     auto storage_engine = GetInstance()->_storage_engine.get();
     return storage_engine != nullptr
-                   ? storage_engine->get_tablet(tablet_id, sync_stats)
+                   ? storage_engine->get_tablet(tablet_id, sync_stats, force_use_only_cached,
+                                                cache_on_miss)
                    : ResultError(Status::InternalError("failed to get tablet {}", tablet_id));
+}
+
+Status ExecEnv::get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta,
+                                bool force_use_only_cached) {
+    auto storage_engine = GetInstance()->_storage_engine.get();
+    if (storage_engine == nullptr) {
+        return Status::InternalError("storage engine is not initialized");
+    }
+    return storage_engine->get_tablet_meta(tablet_id, tablet_meta, force_use_only_cached);
 }
 
 const std::string& ExecEnv::token() const {

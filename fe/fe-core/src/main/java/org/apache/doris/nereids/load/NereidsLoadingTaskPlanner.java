@@ -24,10 +24,11 @@ import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.info.PartitionNamesInfo;
 import org.apache.doris.common.LoadException;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.DebugUtil;
-import org.apache.doris.info.PartitionNamesInfo;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.planner.DataPartition;
 import org.apache.doris.planner.FileLoadScanNode;
@@ -35,6 +36,7 @@ import org.apache.doris.planner.OlapTableSink;
 import org.apache.doris.planner.PlanFragment;
 import org.apache.doris.planner.PlanFragmentId;
 import org.apache.doris.planner.PlanNodeId;
+import org.apache.doris.planner.ScanContext;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.thrift.TBrokerFileStatus;
@@ -146,6 +148,14 @@ public class NereidsLoadingTaskPlanner {
 
         Preconditions.checkState(!fileGroups.isEmpty() && fileGroups.size() == fileStatusesList.size());
 
+        // make sure StatementContext is set in ConnectContext
+        ConnectContext connectContext = ConnectContext.get();
+        if (connectContext != null && connectContext.getStatementContext() == null) {
+            StatementContext statementContext = new StatementContext();
+            connectContext.setStatementContext(statementContext);
+            statementContext.setConnectContext(connectContext);
+        }
+
         PartitionNamesInfo partitionNamesInfo = getPartitionNamesInfo();
         long txnTimeout = timeoutS == 0 ? ConnectContext.get().getExecTimeoutS() : timeoutS;
         if (txnTimeout > Integer.MAX_VALUE) {
@@ -153,7 +163,7 @@ public class NereidsLoadingTaskPlanner {
         }
         NereidsBrokerLoadTask nereidsBrokerLoadTask = new NereidsBrokerLoadTask(txnId, (int) txnTimeout,
                 sendBatchParallelism,
-                strictMode, enableMemtableOnSinkNode, partitionNamesInfo);
+                strictMode, enableMemtableOnSinkNode, singleTabletLoadPerSink, partitionNamesInfo);
 
         TupleDescriptor scanTupleDesc = descTable.createTupleDescriptor();
         scanTupleDesc.setTable(table);
@@ -186,7 +196,10 @@ public class NereidsLoadingTaskPlanner {
         }
 
         // Create a single FileLoadScanNode for all file groups
-        FileLoadScanNode fileScanNode = new FileLoadScanNode(new PlanNodeId(0), loadPlanInfos.get(0).getDestTuple());
+        String clusterName = ConnectContext.get() == null ? ""
+                : ConnectContext.get().getSessionVariable().resolveCloudClusterName();
+        FileLoadScanNode fileScanNode = new FileLoadScanNode(new PlanNodeId(0), loadPlanInfos.get(0).getDestTuple(),
+                ScanContext.builder().clusterName(clusterName).build());
         fileScanNode.finalizeForNereids(loadId, fileGroupInfos, contexts, loadPlanInfos);
         scanNodes.add(fileScanNode);
 

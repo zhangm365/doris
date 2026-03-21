@@ -311,9 +311,6 @@ ObjectStorageHeadResponse S3ObjStorageClient::head_object(const ObjectStoragePat
                          static_cast<int>(outcome.GetError().GetResponseCode()),
                          outcome.GetError().GetRequestId()}};
     }
-    return ObjectStorageHeadResponse {
-            .resp = ObjectStorageResponse::OK(),
-    };
 }
 
 ObjectStorageResponse S3ObjStorageClient::get_object(const ObjectStoragePathOptions& opts,
@@ -327,17 +324,18 @@ ObjectStorageResponse S3ObjStorageClient::get_object(const ObjectStoragePathOpti
     SCOPED_BVAR_LATENCY(s3_bvar::s3_get_latency);
     auto outcome = s3_get_rate_limit([&]() { return _client->GetObject(request); });
     if (!outcome.IsSuccess()) {
-        return {convert_to_obj_response(
-                        s3fs_error(outcome.GetError(),
-                                   fmt::format("failed to read from {}", opts.path.native()))),
+        return {convert_to_obj_response(s3fs_error(
+                        outcome.GetError(), fmt::format("failed to read from {}", opts.key))),
                 static_cast<int>(outcome.GetError().GetResponseCode()),
                 outcome.GetError().GetRequestId()};
     }
     *size_return = outcome.GetResult().GetContentLength();
+    // case for incomplete read
+    SYNC_POINT_CALLBACK("s3_obj_storage_client::get_object", size_return);
     if (*size_return != bytes_read) {
         return {convert_to_obj_response(Status::InternalError(
-                "failed to read from {}(bytes read: {}, bytes req: {}), request_id: {}",
-                opts.path.native(), *size_return, bytes_read, outcome.GetResult().GetRequestId()))};
+                "failed to read from {}(bytes read: {}, bytes req: {}), request_id: {}", opts.key,
+                *size_return, bytes_read, outcome.GetResult().GetRequestId()))};
     }
     return ObjectStorageResponse::OK();
 }
@@ -355,6 +353,15 @@ ObjectStorageResponse S3ObjStorageClient::list_objects(const ObjectStoragePathOp
         }
         if (!outcome.IsSuccess()) {
             files->clear();
+            // Treat NoSuchKey as empty response for compatibility with some S3-compatible storage providers
+            // e.g. TOS by ByteDance Cloud (Volcano Engine)
+            if (outcome.GetError().GetErrorType() == Aws::S3::S3Errors::NO_SUCH_KEY) {
+                LOG(INFO) << "NoSuchKey error when listing objects, treat as empty response"
+                          << ", prefix=" << opts.prefix
+                          << ", request_id=" << outcome.GetError().GetRequestId();
+                return ObjectStorageResponse::OK();
+            }
+
             return {convert_to_obj_response(s3fs_error(
                             outcome.GetError(), fmt::format("failed to list {}", opts.prefix))),
                     static_cast<int>(outcome.GetError().GetResponseCode()),
@@ -405,6 +412,8 @@ ObjectStorageResponse S3ObjStorageClient::delete_objects(const ObjectStoragePath
                 static_cast<int>(delete_outcome.GetError().GetResponseCode()),
                 delete_outcome.GetError().GetRequestId()};
     }
+    // case for partial delete object failure
+    SYNC_POINT_CALLBACK("s3_obj_storage_client::delete_objects", &delete_outcome);
     if (!delete_outcome.GetResult().GetErrors().empty()) {
         const auto& e = delete_outcome.GetResult().GetErrors().front();
         return {convert_to_obj_response(
@@ -470,6 +479,9 @@ ObjectStorageResponse S3ObjStorageClient::delete_objects_recursively(
                         static_cast<int>(delete_outcome.GetError().GetResponseCode()),
                         delete_outcome.GetError().GetRequestId()};
             }
+            // case for partial delete object failure
+            SYNC_POINT_CALLBACK("s3_obj_storage_client::delete_objects_recursively",
+                                &delete_outcome);
             if (!delete_outcome.GetResult().GetErrors().empty()) {
                 const auto& e = delete_outcome.GetResult().GetErrors().front();
                 return {convert_to_obj_response(Status::InternalError(

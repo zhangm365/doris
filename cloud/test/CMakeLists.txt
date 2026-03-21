@@ -11,6 +11,7 @@ set(EXECUTABLE_OUTPUT_PATH "${BUILD_DIR}/test")
 set(TEST_LINK_LIBS ResourceManager ${TEST_LINK_LIBS})
 
 #add_executable(sync_point_test sync_point_test.cpp)
+add_executable(blob_message_test blob_message_test.cpp)
 
 add_executable(clone_chain_reader_test clone_chain_reader_test.cpp)
 
@@ -28,7 +29,9 @@ set_target_properties(txn_kv_test PROPERTIES COMPILE_FLAGS "-fno-access-control"
 add_executable(recycler_test
     recycler_test.cpp
     recycler_operation_log_test.cpp
-    recycle_versioned_keys_test.cpp)
+    snapshot_data_size_calculator_test.cpp
+    recycle_versioned_keys_test.cpp
+    recycler_batch_delete_test.cpp)
 
 add_executable(mem_txn_kv_test mem_txn_kv_test.cpp)
 
@@ -43,6 +46,7 @@ add_executable(meta_service_test
    meta_service_tablet_stats_test.cpp
    meta_service_versioned_read_test.cpp
    schema_kv_test.cpp
+   compaction_rw_separation_test.cpp
 )
 
 add_executable(meta_server_test meta_server_test.cpp)
@@ -66,6 +70,8 @@ add_executable(http_encode_key_test http_encode_key_test.cpp)
 add_executable(fdb_injection_test fdb_injection_test.cpp)
 
 add_executable(s3_accessor_test s3_accessor_test.cpp)
+
+add_executable(s3_accessor_client_test s3_accessor_client_test.cpp)
 
 add_executable(s3_accessor_mock_test s3_accessor_mock_test.cpp)
 
@@ -91,6 +97,8 @@ add_executable(bvars_test bvars_test.cpp)
 
 message("Meta-service test dependencies: ${TEST_LINK_LIBS}")
 #target_link_libraries(sync_point_test ${TEST_LINK_LIBS})
+
+target_link_libraries(blob_message_test ${TEST_LINK_LIBS})
 
 target_link_libraries(clone_chain_reader_test ${TEST_LINK_LIBS})
 
@@ -121,6 +129,8 @@ target_link_libraries(rpc_kv_bvar_test ${TEST_LINK_LIBS})
 target_link_libraries(http_encode_key_test ${TEST_LINK_LIBS})
 
 target_link_libraries(s3_accessor_test ${TEST_LINK_LIBS})
+
+target_link_libraries(s3_accessor_client_test ${TEST_LINK_LIBS})
 
 target_link_libraries(s3_accessor_mock_test ${TEST_LINK_LIBS})
 

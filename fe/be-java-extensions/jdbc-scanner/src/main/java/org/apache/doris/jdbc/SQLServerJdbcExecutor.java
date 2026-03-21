@@ -32,6 +32,10 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+/**
+ * @deprecated Use {@link SQLServerTypeHandler} instead.
+ */
+@Deprecated
 public class SQLServerJdbcExecutor extends BaseJdbcExecutor {
     public SQLServerJdbcExecutor(byte[] thriftParams) throws Exception {
         super(thriftParams);
@@ -87,6 +91,8 @@ public class SQLServerJdbcExecutor extends BaseJdbcExecutor {
             case VARCHAR:
             case STRING:
                 return resultSet.getObject(columnIndex + 1);
+            case VARBINARY:
+                return resultSet.getObject(columnIndex + 1, byte[].class);
             default:
                 throw new IllegalArgumentException("Unsupported column type: " + type.getType());
         }

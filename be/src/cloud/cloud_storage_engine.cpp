@@ -46,6 +46,7 @@
 #include "common/config.h"
 #include "common/signal_handler.h"
 #include "common/status.h"
+#include "core/assert_cast.h"
 #include "io/cache/block_file_cache_downloader.h"
 #include "io/cache/block_file_cache_factory.h"
 #include "io/cache/file_cache_common.h"
@@ -54,14 +55,13 @@
 #include "io/fs/s3_file_system.h"
 #include "io/hdfs_util.h"
 #include "io/io_common.h"
-#include "olap/cumulative_compaction_policy.h"
-#include "olap/cumulative_compaction_time_series_policy.h"
-#include "olap/memtable_flush_executor.h"
-#include "olap/storage_policy.h"
+#include "load/memtable/memtable_flush_executor.h"
 #include "runtime/memory/cache_manager.h"
+#include "storage/compaction/cumulative_compaction_policy.h"
+#include "storage/compaction/cumulative_compaction_time_series_policy.h"
+#include "storage/storage_policy.h"
 #include "util/parse_util.h"
 #include "util/time.h"
-#include "vec/common/assert_cast.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -223,6 +223,9 @@ Status CloudStorageEngine::open() {
                     : config::delete_bitmap_agg_cache_capacity);
     RETURN_IF_ERROR(_txn_delete_bitmap_cache->init());
 
+    _committed_rs_mgr = std::make_unique<CloudCommittedRSMgr>();
+    RETURN_IF_ERROR(_committed_rs_mgr->init());
+
     _file_cache_block_downloader = std::make_unique<io::FileCacheBlockDownloader>(*this);
 
     _cloud_warm_up_manager = std::make_unique<CloudWarmUpManager>(*this);
@@ -238,10 +241,19 @@ Status CloudStorageEngine::open() {
     // check cluster id
     RETURN_NOT_OK_STATUS_WITH_WARN(_check_all_root_path_cluster_id(), "fail to check cluster id");
 
-    return ThreadPoolBuilder("SyncLoadForTabletsThreadPool")
-            .set_max_threads(config::sync_load_for_tablets_thread)
-            .set_min_threads(config::sync_load_for_tablets_thread)
-            .build(&_sync_load_for_tablets_thread_pool);
+    RETURN_NOT_OK_STATUS_WITH_WARN(ThreadPoolBuilder("SyncLoadForTabletsThreadPool")
+                                           .set_max_threads(config::sync_load_for_tablets_thread)
+                                           .set_min_threads(config::sync_load_for_tablets_thread)
+                                           .build(&_sync_load_for_tablets_thread_pool),
+                                   "fail to build SyncLoadForTabletsThreadPool");
+
+    RETURN_NOT_OK_STATUS_WITH_WARN(ThreadPoolBuilder("WarmupCacheAsyncThreadPool")
+                                           .set_max_threads(config::warmup_cache_async_thread)
+                                           .set_min_threads(config::warmup_cache_async_thread)
+                                           .build(&_warmup_cache_async_thread_pool),
+                                   "fail to build WarmupCacheAsyncThreadPool");
+
+    return Status::OK();
 }
 
 void CloudStorageEngine::stop() {
@@ -280,9 +292,34 @@ bool CloudStorageEngine::stopped() {
 
 Result<BaseTabletSPtr> CloudStorageEngine::get_tablet(int64_t tablet_id,
                                                       SyncRowsetStats* sync_stats,
-                                                      bool force_use_cache) {
-    return _tablet_mgr->get_tablet(tablet_id, false, true, sync_stats, force_use_cache)
+                                                      bool force_use_only_cached,
+                                                      bool cache_on_miss) {
+    return _tablet_mgr
+            ->get_tablet(tablet_id, false, true, sync_stats, force_use_only_cached, cache_on_miss)
             .transform([](auto&& t) { return static_pointer_cast<BaseTablet>(std::move(t)); });
+}
+
+Status CloudStorageEngine::get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta,
+                                           bool force_use_only_cached) {
+    if (tablet_meta == nullptr) {
+        return Status::InvalidArgument("tablet_meta output is null");
+    }
+
+#if 0
+    if (_tablet_mgr && _tablet_mgr->peek_tablet_meta(tablet_id, tablet_meta)) {
+        return Status::OK();
+    }
+
+    if (force_use_only_cached) {
+        return Status::NotFound("tablet meta {} not found in cache", tablet_id);
+    }
+#endif
+
+    if (_meta_mgr == nullptr) {
+        return Status::InternalError("cloud meta manager is not initialized");
+    }
+
+    return _meta_mgr->get_tablet_meta(tablet_id, tablet_meta);
 }
 
 Status CloudStorageEngine::start_bg_threads(std::shared_ptr<WorkloadGroup> wg_sptr) {

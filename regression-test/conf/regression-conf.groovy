@@ -301,3 +301,35 @@ hudiEmrCatalog = ""
 icebergS3TablesCatalog=""
 icebergS3TablesCatalogGlueRest=""
 
+// The path of the cert configuration file for the testing framework 
+// is consistent with the path of the cert file for the cluster
+enableTLS=false
+tlsVerifyMode="strict"
+keyStorePath="/your/keystore.p12"
+keyStorePassword="yourPwd"
+keyStoreType="PKCS12"
+trustStorePath="/your/truststore.p12"
+trustStorePassword="yourPwd"
+trustStoreType="PKCS12"
+trustCert="/your/certificate.crt"
+trustCACert="/your/ca.crt"
+trustCAKey="/your/certificate.key"
+
+
+enableTestTvfAnonymous="true"
+anymousS3Uri="https://datasets-documentation.s3.eu-west-3.amazonaws.com/aapl_stock.csv"
+anymousS3Region="eu-west-3"
+anymousS3ExpectDataCount="8365"
+awsInstanceProfileRegion="us-east-1"
+
+// hudi p0 external regression test config
+// To enable hudi test, you need first start hudi container.
+// See `docker/thirdparties/run-thirdparties-docker.sh -c hudi`
+enableHudiTest=true
+// hudi catalog config
+hudiHmsPort=19083
+hudiMinioPort=19100
+hudiMinioAccessKey="minio"
+hudiMinioSecretKey="minio123"
+
+icebergDlfRestCatalog="'type' = 'iceberg', 'warehouse' = 'new_dlf_iceberg_catalog', 'iceberg.catalog.type' = 'rest', 'iceberg.rest.uri' = 'http://cn-beijing-vpc.dlf.aliyuncs.com/iceberg', 'iceberg.rest.sigv4-enabled' = 'true', 'iceberg.rest.signing-name' = 'DlfNext', 'iceberg.rest.access-key-id' = 'ak', 'iceberg.rest.secret-access-key' = 'sk', 'iceberg.rest.signing-region' = 'cn-beijing', 'iceberg.rest.vended-credentials-enabled' = 'true', 'io-impl' = 'org.apache.iceberg.rest.DlfFileIO', 'fs.oss.support' = 'true'"

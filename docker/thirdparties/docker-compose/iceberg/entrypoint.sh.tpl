@@ -25,6 +25,10 @@ done
 
 set -ex
 
+# remove /opt/spark/jars/iceberg-aws-bundle-1.5.0.jar\:/opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.5.0.jar
+rm /opt/spark/jars/iceberg-aws-bundle-1.5.0.jar
+rm /opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.5.0.jar
+
 start-master.sh -p 7077
 start-worker.sh spark://doris--spark-iceberg:7077
 start-history-server.sh
@@ -49,6 +53,24 @@ spark-sql  --master  spark://doris--spark-iceberg:7077 --conf spark.sql.extensio
 END_TIME2=$(date +%s)
 EXECUTION_TIME2=$((END_TIME2 - START_TIME2))
 echo "Script paimon total: {} executed in $EXECUTION_TIME2 seconds"
+
+
+
+ls /mnt/scripts/create_preinstalled_scripts/iceberg_scala/*.scala | xargs -n 1 -I {} bash -c '
+    START_TIME=$(date +%s)
+    spark-shell --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions -I {} 
+    END_TIME=$(date +%s)
+    EXECUTION_TIME=$((END_TIME - START_TIME))
+    echo "Script: {} executed in $EXECUTION_TIME seconds"
+'
+
+
+START_TIME3=$(date +%s)
+find /mnt/scripts/create_preinstalled_scripts/iceberg_load -name '*.sql' | sed 's|^|source |' | sed 's|$|;|'> iceberg_load_total.sql
+spark-sql --master spark://doris--spark-iceberg:7077 --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions -f iceberg_load_total.sql 
+END_TIME3=$(date +%s)
+EXECUTION_TIME3=$((END_TIME3 - START_TIME3))
+echo "Script iceberg load total: {} executed in $EXECUTION_TIME3 seconds"
 
 touch /mnt/SUCCESS;
 

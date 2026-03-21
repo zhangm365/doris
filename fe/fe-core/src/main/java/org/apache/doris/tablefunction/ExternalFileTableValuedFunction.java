@@ -31,6 +31,7 @@ import org.apache.doris.catalog.StructField;
 import org.apache.doris.catalog.StructType;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Type;
+import org.apache.doris.catalog.VariantType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -52,6 +53,7 @@ import org.apache.doris.datasource.tvf.source.TVFScanNode;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.exceptions.NotSupportedException;
 import org.apache.doris.planner.PlanNodeId;
+import org.apache.doris.planner.ScanContext;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.proto.InternalService;
 import org.apache.doris.proto.InternalService.PFetchTableSchemaRequest;
@@ -192,6 +194,17 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
 
         String formatString = getOrDefaultAndRemove(copiedProps, FileFormatConstants.PROP_FORMAT, "").toLowerCase();
         fileFormatProperties = FileFormatProperties.createFileFormatProperties(formatString);
+
+        // Parse enable_mapping_varbinary property
+        String enableMappingVarbinaryStr = getOrDefaultAndRemove(copiedProps,
+                FileFormatConstants.PROP_ENABLE_MAPPING_VARBINARY, "false");
+        fileFormatProperties.enableMappingVarbinary = Boolean.parseBoolean(enableMappingVarbinaryStr);
+
+        // Parse enable_mapping_timestamp_tz property
+        String enableMappingTimestampTzStr = getOrDefaultAndRemove(copiedProps,
+                FileFormatConstants.PROP_ENABLE_MAPPING_TIMESTAMP_TZ, "false");
+        fileFormatProperties.enableMappingTimestampTz = Boolean.parseBoolean(enableMappingTimestampTzStr);
+
         fileFormatProperties.analyzeFileFormatProperties(copiedProps, true);
 
         if (fileFormatProperties instanceof CsvFileFormatProperties
@@ -229,7 +242,8 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
 
     @Override
     public ScanNode getScanNode(PlanNodeId id, TupleDescriptor desc, SessionVariable sv) {
-        return new TVFScanNode(id, desc, false, sv);
+        return new TVFScanNode(id, desc, false, sv,
+                ScanContext.builder().clusterName(sv.resolveCloudClusterName()).build());
     }
 
     @Override
@@ -346,7 +360,8 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
      * @return column type and the number of parsed PTypeNodes
      */
     private Pair<Type, Integer> getColumnType(List<PTypeNode> typeNodes, int start) {
-        PScalarType columnType = typeNodes.get(start).getScalarType();
+        PTypeNode typeNode = typeNodes.get(start);
+        PScalarType columnType = typeNode.getScalarType();
         TPrimitiveType tPrimitiveType = TPrimitiveType.findByValue(columnType.getType());
         Type type;
         int parsedNodes;
@@ -378,6 +393,20 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
                 parsedNodes += fieldType.value();
             }
             type = new StructType(fields);
+        } else if (tPrimitiveType == TPrimitiveType.VARIANT) {
+            // Preserve VARIANT-specific properties from PTypeNode, especially variant_max_subcolumns_count.
+            int maxSubcolumns = typeNode.getVariantMaxSubcolumnsCount();
+            // Currently no predefined fields are carried in PTypeNode for VARIANT, so use empty list and default
+            // values for other properties.
+            type = new VariantType(new ArrayList<>(), maxSubcolumns,
+                    /*enableTypedPathsToSparse*/ false,
+                    /*variantMaxSparseColumnStatisticsSize*/ 10000,
+                    /*variantSparseHashShardCount*/ 0,
+                    /*variantEnableDocMode*/ false,
+                    /*variantDocMaterializationMinRows*/ 0,
+                    /*variantDocShardCount*/ 0,
+                    /*enableNestedGroup*/ false);
+            parsedNodes = 1;
         } else {
             type = ScalarType.createType(PrimitiveType.fromThrift(tPrimitiveType),
                     columnType.getLen(), columnType.getPrecision(), columnType.getScale());
@@ -425,6 +454,9 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
         fileScanRangeParams.setFileAttributes(getFileAttributes());
         ConnectContext ctx = ConnectContext.get();
         fileScanRangeParams.setLoadId(ctx.queryId());
+        // table function fetch schema, whether to enable mapping varbinary
+        fileScanRangeParams.setEnableMappingVarbinary(fileFormatProperties.enableMappingVarbinary);
+        fileScanRangeParams.setEnableMappingTimestampTz(fileFormatProperties.enableMappingTimestampTz);
 
         if (getTFileType() == TFileType.FILE_STREAM) {
             fileStatuses.add(new TBrokerFileStatus("", false, -1, true));
@@ -526,4 +558,3 @@ public abstract class ExternalFileTableValuedFunction extends TableValuedFunctio
         }
     }
 }
-

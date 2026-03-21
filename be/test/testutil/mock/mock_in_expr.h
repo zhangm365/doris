@@ -20,17 +20,17 @@
 #include <string>
 
 #include "common/status.h"
-#include "vec/exprs/vectorized_fn_call.h"
-#include "vec/exprs/vexpr.h"
-#include "vec/exprs/vin_predicate.h"
+#include "exprs/vectorized_fn_call.h"
+#include "exprs/vexpr.h"
+#include "exprs/vin_predicate.h"
 
-namespace doris::vectorized {
+namespace doris {
 class Block;
 class VExprContext;
 // use to mock a slot ref expr
 class MockInExpr final : public VInPredicate {
 public:
-    MockInExpr() = default;
+    MockInExpr() { _node_type = TExprNodeType::IN_PRED; }
 
     Status execute(VExprContext* context, Block* block, int* result_column_id) const override {
         return Status::OK();
@@ -44,4 +44,4 @@ public:
     static VExprContextSPtr create_with_ctx(ColumnPtr column, bool is_not_in = false);
 };
 
-} // namespace doris::vectorized
+} // namespace doris

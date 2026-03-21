@@ -40,10 +40,6 @@ expressionWithEof
 statement
     : statementBase # statementBaseAlias
     | CALL name=multipartIdentifier LEFT_PAREN (expression (COMMA expression)*)? RIGHT_PAREN #callProcedure
-    | (ALTER | CREATE (OR REPLACE)? | REPLACE) (PROCEDURE | PROC) name=multipartIdentifier LEFT_PAREN .*? RIGHT_PAREN .*? #createProcedure
-    | DROP (PROCEDURE | PROC) (IF EXISTS)? name=multipartIdentifier #dropProcedure
-    | SHOW (PROCEDURE | FUNCTION) STATUS (LIKE pattern=valueExpression | whereClause)? #showProcedureStatus
-    | SHOW CREATE PROCEDURE name=multipartIdentifier #showCreateProcedure
     // FIXME: like should be wildWhere? FRONTEND should not contain FROM backendid
     | ADMIN? SHOW type=(FRONTEND | BACKEND) CONFIG (LIKE pattern=valueExpression)? (FROM backendId=INTEGER_VALUE)? #showConfig
     ;
@@ -98,8 +94,14 @@ materializedViewStatement
     | CANCEL MATERIALIZED VIEW TASK taskId=INTEGER_VALUE ON mvName=multipartIdentifier          #cancelMTMVTask
     | SHOW CREATE MATERIALIZED VIEW mvName=multipartIdentifier                                  #showCreateMTMV
     ;
+
+jobFromToClause
+    : FROM sourceType=identifier (LEFT_PAREN sourceProperties=propertyItemList RIGHT_PAREN)?
+      TO DATABASE targetDb=identifier (LEFT_PAREN targetProperties=propertyItemList RIGHT_PAREN)?
+    ;
+
 supportedJobStatement
-    : CREATE JOB label=multipartIdentifier propertyClause?
+    : CREATE JOB label=multipartIdentifier jobProperties=propertyClause?
       ON (STREAMING | SCHEDULE(
             (EVERY timeInterval=INTEGER_VALUE timeUnit=identifier
             (STARTS (startTime=STRING_LITERAL | CURRENT_TIMESTAMP))?
@@ -108,10 +110,12 @@ supportedJobStatement
             (AT (atTime=STRING_LITERAL | CURRENT_TIMESTAMP))
             )
          )
-       commentSpec?
-       DO supportedDmlStatement                                                                                                             #createScheduledJob
+      commentSpec?
+       (jobFromToClause | DO supportedDmlStatement )                                                                                         #createScheduledJob
    | PAUSE JOB WHERE (jobNameKey=identifier) EQ (jobNameValue=STRING_LITERAL)                                                                #pauseJob
-   | ALTER JOB (jobName=multipartIdentifier) (propertyClause | supportedDmlStatement | propertyClause  supportedDmlStatement)                  #alterJob
+   | ALTER JOB (jobName=multipartIdentifier)
+               (propertyClause | supportedDmlStatement | propertyClause  supportedDmlStatement
+               | jobFromToClause | propertyClause jobFromToClause)                                                                           #alterJob
    | DROP JOB (IF EXISTS)? WHERE (jobNameKey=identifier) EQ (jobNameValue=STRING_LITERAL)                                                    #dropJob
    | RESUME JOB WHERE (jobNameKey=identifier) EQ (jobNameValue=STRING_LITERAL)                                                               #resumeJob
    | CANCEL TASK WHERE (jobNameKey=identifier) EQ (jobNameValue=STRING_LITERAL) AND (taskIdKey=identifier) EQ (taskIdValue=INTEGER_VALUE)    #cancelJobTask
@@ -130,7 +134,11 @@ optSpecBranch
     ;
 
 supportedDmlStatement
-    : explain? cte? INSERT (INTO | OVERWRITE TABLE)
+    : explain? cte? INSERT INTO tvfName=identifier
+        LEFT_PAREN tvfProperties=propertyItemList RIGHT_PAREN
+        (WITH LABEL labelName=identifier)?
+        query                                                          #insertIntoTVF
+    | explain? cte? INSERT (INTO | OVERWRITE TABLE)
         (tableName=multipartIdentifier (optSpecBranch)? | DORIS_INTERNAL_TABLE_ID LEFT_PAREN tableId=INTEGER_VALUE RIGHT_PAREN)
         partitionSpec?  // partition define
         (WITH LABEL labelName=identifier)? cols=identifierList?  // label and columns define
@@ -181,8 +189,8 @@ supportedCreateStatement
     : CREATE (EXTERNAL | TEMPORARY)? TABLE (IF NOT EXISTS)? name=multipartIdentifier
         ((ctasCols=identifierList)? | (LEFT_PAREN columnDefs (COMMA indexDefs)? COMMA? RIGHT_PAREN))
         (ENGINE EQ engine=identifier)?
-        ((AGGREGATE | UNIQUE | DUPLICATE) KEY keys=identifierList
-        (CLUSTER BY clusterKeys=identifierList)?)?
+        ((AGGREGATE | UNIQUE | DUPLICATE) KEY keys=identifierList)?
+        (ORDER BY LEFT_PAREN sortItems+=sortItem (COMMA sortItems+=sortItem)* RIGHT_PAREN)?
         (COMMENT STRING_LITERAL)?
         (partition=partitionTable)?
         (DISTRIBUTED BY (HASH hashKeys=identifierList | RANDOM)
@@ -200,6 +208,8 @@ supportedCreateStatement
         LIKE existedTable=multipartIdentifier
         (WITH ROLLUP (rollupNames=identifierList)?)?                      #createTableLike
     | CREATE ROLE (IF NOT EXISTS)? name=identifierOrText (COMMENT STRING_LITERAL)?    #createRole
+    | CREATE AUTHENTICATION INTEGRATION (IF NOT EXISTS)? integrationName=identifier
+        properties=propertyClause commentSpec?                                  #createAuthenticationIntegration
     | CREATE WORKLOAD GROUP (IF NOT EXISTS)?
         name=identifierOrText (FOR computeGroup=identifierOrText)? properties=propertyClause? #createWorkloadGroup
     | CREATE CATALOG (IF NOT EXISTS)? catalogName=identifier
@@ -216,7 +226,7 @@ supportedCreateStatement
         partitionSpec?                                                          #buildIndex
     | CREATE INDEX (IF NOT EXISTS)? name=identifier
         ON tableName=multipartIdentifier identifierList
-        (USING (BITMAP | NGRAM_BF | INVERTED | ANN))?
+        (USING (NGRAM_BF | INVERTED | ANN))?
         properties=propertyClause? (COMMENT STRING_LITERAL)?                    #createIndex
     | CREATE WORKLOAD POLICY (IF NOT EXISTS)? name=identifierOrText
         (CONDITIONS LEFT_PAREN workloadPolicyConditions RIGHT_PAREN)?
@@ -229,14 +239,15 @@ supportedCreateStatement
             (TABLES | AGGREGATE)? FUNCTION (IF NOT EXISTS)?
             functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
             RETURNS returnType=dataType (INTERMEDIATE intermediateType=dataType)?
-            properties=propertyClause?                                              #createUserDefineFunction
+            properties=propertyClause?
+            (AS functionCode=dollarQuotedString)?                                   #createUserDefineFunction
     | CREATE statementScope? ALIAS FUNCTION (IF NOT EXISTS)?
             functionIdentifier LEFT_PAREN functionArguments? RIGHT_PAREN
             WITH PARAMETER LEFT_PAREN parameters=identifierSeq? RIGHT_PAREN
             AS expression                                                           #createAliasFunction
     | CREATE USER (IF NOT EXISTS)? grantUserIdentify
             (SUPERUSER | DEFAULT ROLE role=STRING_LITERAL)?
-            passwordOption commentSpec?                                             #createUser
+            passwordOption requireClause? commentSpec?                              #createUser
     | CREATE (DATABASE | SCHEMA) (IF NOT EXISTS)? name=multipartIdentifier
               properties=propertyClause?                                            #createDatabase
     | CREATE (READ ONLY)? REPOSITORY name=identifier WITH storageBackend            #createRepository
@@ -258,6 +269,8 @@ supportedCreateStatement
         name=identifier properties=propertyClause?                                  #createIndexTokenFilter
     | CREATE INVERTED INDEX CHAR_FILTER (IF NOT EXISTS)?
         name=identifier properties=propertyClause?                                  #createIndexCharFilter
+    | CREATE INVERTED INDEX NORMALIZER (IF NOT EXISTS)?
+        name=identifier properties=propertyClause?                                  #createIndexNormalizer
     ;
 
 dictionaryColumnDefs:
@@ -281,6 +294,12 @@ supportedAlterStatement
         properties=propertyClause?                                                          #alterComputeGroup
     | ALTER CATALOG name=identifier SET PROPERTIES
         LEFT_PAREN propertyItemList RIGHT_PAREN                                             #alterCatalogProperties        
+    | ALTER AUTHENTICATION INTEGRATION integrationName=identifier
+        SET properties=propertyClause                                                       #alterAuthenticationIntegrationProperties
+    | ALTER AUTHENTICATION INTEGRATION integrationName=identifier
+        UNSET properties=propertyKeyClause                                                  #alterAuthenticationIntegrationUnsetProperties
+    | ALTER AUTHENTICATION INTEGRATION integrationName=identifier
+        SET COMMENT comment=STRING_LITERAL                                                   #alterAuthenticationIntegrationComment
     | ALTER WORKLOAD POLICY name=identifierOrText
         properties=propertyClause?                                                          #alterWorkloadPolicy
     | ALTER SQL_BLOCK_RULE name=identifier properties=propertyClause?                       #alterSqlBlockRule
@@ -312,7 +331,7 @@ supportedAlterStatement
     | ALTER COLOCATE GROUP name=multipartIdentifier
         SET LEFT_PAREN propertyItemList RIGHT_PAREN                                         #alterColocateGroup
     | ALTER USER (IF EXISTS)? grantUserIdentify
-        passwordOption (COMMENT STRING_LITERAL)?                                            #alterUser
+        passwordOption requireClause? commentSpec?                                          #alterUser
     ;
 
 supportedDropStatement
@@ -324,6 +343,7 @@ supportedDropStatement
     | DROP STORAGE POLICY (IF EXISTS)? name=identifier                          #dropStoragePolicy
     | DROP WORKLOAD GROUP (IF EXISTS)? name=identifierOrText (FOR computeGroup=identifierOrText)?                    #dropWorkloadGroup
     | DROP CATALOG (IF EXISTS)? name=identifier                                 #dropCatalog
+    | DROP AUTHENTICATION INTEGRATION (IF EXISTS)? name=identifier              #dropAuthenticationIntegration
     | DROP FILE name=STRING_LITERAL
         ((FROM | IN) database=identifier)? properties=propertyClause            #dropFile
     | DROP WORKLOAD POLICY (IF EXISTS)? name=identifierOrText                   #dropWorkloadPolicy
@@ -344,6 +364,7 @@ supportedDropStatement
     | DROP INVERTED INDEX TOKENIZER (IF EXISTS)? name=identifier                #dropIndexTokenizer
     | DROP INVERTED INDEX TOKEN_FILTER (IF EXISTS)? name=identifier             #dropIndexTokenFilter
     | DROP INVERTED INDEX CHAR_FILTER (IF EXISTS)? name=identifier              #dropIndexCharFilter
+    | DROP INVERTED INDEX NORMALIZER (IF EXISTS)? name=identifier               #dropIndexNormalizer
     ;
 
 supportedShowStatement
@@ -367,9 +388,10 @@ supportedShowStatement
     | SHOW CREATE statementScope? FUNCTION functionIdentifier
         LEFT_PAREN functionArguments? RIGHT_PAREN
         ((FROM | IN) database=multipartIdentifier)?                                 #showCreateFunction
-    | SHOW FULL? BUILTIN? FUNCTIONS
+    | SHOW FULL? FUNCTIONS
         ((FROM | IN) database=multipartIdentifier)? (LIKE STRING_LITERAL)?          #showFunctions
     | SHOW GLOBAL FULL? FUNCTIONS (LIKE STRING_LITERAL)?                            #showGlobalFunctions
+    | SHOW FULL? BUILTIN FUNCTIONS (LIKE STRING_LITERAL)?                           #showBuiltinFunctions
     | SHOW ALL? GRANTS                                                              #showGrants
     | SHOW GRANTS FOR userIdentify                                                  #showGrantsForUser
     | SHOW CREATE USER userIdentify                                                 #showCreateUser
@@ -462,6 +484,8 @@ supportedShowStatement
         (FROM |IN) tableName=multipartIdentifier
         ((FROM | IN) database=multipartIdentifier)?                                 #showIndex
     | SHOW WARM UP JOB wildWhere?                                                   #showWarmUpJob
+    | SHOW PYTHON VERSIONS                                                           #showPythonVersions
+    | SHOW PYTHON PACKAGES IN STRING_LITERAL                                         #showPythonPackages
     ;
 
 supportedLoadStatement
@@ -483,6 +507,7 @@ supportedLoadStatement
     | SHOW INVERTED INDEX TOKENIZER                                                 #showIndexTokenizer
     | SHOW INVERTED INDEX TOKEN_FILTER                                              #showIndexTokenFilter
     | SHOW INVERTED INDEX CHAR_FILTER                                               #showIndexCharFilter
+    | SHOW INVERTED INDEX NORMALIZER                                                #showIndexNormalizer
     ;
 
 supportedKillStatement
@@ -516,7 +541,7 @@ supportedOtherStatement
     ;
 
 warmUpSingleTableRef
-    : multipartIdentifier tableAlias?
+    : multipartIdentifier tableAlias
     ;
 
 lockTable
@@ -572,7 +597,7 @@ supportedRefreshStatement
     | REFRESH DATABASE name=multipartIdentifier propertyClause?                     #refreshDatabase
     | REFRESH TABLE name=multipartIdentifier                                        #refreshTable
     | REFRESH DICTIONARY name=multipartIdentifier                                   #refreshDictionary
-    | REFRESH LDAP (ALL | (FOR user=identifierOrText))                              #refreshLdap
+    | REFRESH LDAP (ALL | (FOR user=identifierOrText))?                             #refreshLdap
     ;
 
 supportedCleanStatement
@@ -753,6 +778,12 @@ alterTableClause
     | createOrReplaceBranchClause                                                   #createOrReplaceBranchClauses
     | dropBranchClause                                                              #dropBranchClauses
     | dropTagClause                                                                 #dropTagClauses
+    | ADD PARTITION KEY partitionTransform (AS partitionFieldName=identifier)?      #addPartitionFieldClause
+    | DROP PARTITION KEY (partitionFieldName=identifier | partitionTransform)       #dropPartitionFieldClause
+    | REPLACE PARTITION KEY
+        (oldPartitionFieldName=identifier | oldPartitionTransform=partitionTransform)
+        WITH newPartitionTransform=partitionTransform (AS newPartitionFieldName=identifier)?
+                                                                                    #replacePartitionFieldClause
     ;
 
 createOrReplaceTagClause
@@ -797,6 +828,12 @@ dropBranchClause
 
 dropTagClause
     : DROP TAG (IF EXISTS)? name=identifier
+    ;
+
+partitionTransform
+    : identifier LEFT_PAREN INTEGER_VALUE COMMA identifier RIGHT_PAREN  #partitionTransformWithArgs
+    | identifier LEFT_PAREN identifier RIGHT_PAREN                      #partitionTransformWithColumn
+    | identifier                                                        #partitionTransformIdentity
     ;
 
 columnPosition
@@ -888,6 +925,17 @@ passwordOption
         (ACCOUNT_LOCK | ACCOUNT_UNLOCK)?
     ;
 
+requireClause
+    : REQUIRE (NONE | tlsOption (AND? tlsOption)*)
+    ;
+
+tlsOption
+    : SAN STRING_LITERAL
+    | ISSUER STRING_LITERAL
+    | CIPHER STRING_LITERAL
+    | SUBJECT STRING_LITERAL
+    ;
+
 functionArguments
     : DOTDOTDOT
     | dataTypeList
@@ -911,7 +959,7 @@ supportedSetStatement
     ;
 
 optionWithType
-    : statementScope identifier EQ (expression | DEFAULT)   #setVariableWithType
+    : statementScope identifier EQ (expression | DEFAULT | ON | ALL)    #setVariableWithType
     ;
 
 optionWithoutType
@@ -927,8 +975,9 @@ optionWithoutType
     ;
 
 variable
-    : (DOUBLEATSIGN (statementScope DOT)?)? identifier EQ (expression | DEFAULT) #setSystemVariable
-    | ATSIGN identifier EQ expression #setUserVariable
+    : (DOUBLEATSIGN (statementScope DOT)?)? identifier EQ
+        (expression | DEFAULT | ON | ALL)                               #setSystemVariable
+    | ATSIGN identifier EQ expression                                   #setUserVariable
     ;
 
 transactionAccessMode
@@ -975,8 +1024,12 @@ partitionSpec
     : TEMPORARY? (PARTITION | PARTITIONS) partitions=identifierList
     | TEMPORARY? PARTITION partition=errorCapturingIdentifier
 	| (PARTITION | PARTITIONS) LEFT_PAREN ASTERISK RIGHT_PAREN // for auto detect partition in overwriting
-	// TODO: support analyze external table partition spec https://github.com/apache/doris/pull/24154
+	| PARTITION LEFT_PAREN partitionKeyValue (COMMA partitionKeyValue)* RIGHT_PAREN // static partition: PARTITION (col1='val1', col2='val2')
 	// | PARTITIONS WITH RECENT
+    ;
+
+partitionKeyValue
+    : identifier EQ expression  // col='value' or col=123
     ;
 
 partitionTable
@@ -1206,7 +1259,6 @@ queryPrimary
 
 querySpecification
     : selectClause
-      intoClause?
       fromClause?
       whereClause?
       aggClause?
@@ -1216,7 +1268,7 @@ querySpecification
     ;
 
 cte
-    : WITH aliasQuery (COMMA aliasQuery)*
+    : WITH RECURSIVE? aliasQuery (COMMA aliasQuery)*
     ;
 
 aliasQuery
@@ -1240,20 +1292,8 @@ whereClause
     ;
 
 fromClause
-    : FROM relations
-    ;
-
-// For PL-SQL
-intoClause
-    : bulkCollectClause? INTO (tableRow | identifier) (COMMA (tableRow | identifier))*
-    ;
-
-bulkCollectClause :
-       BULK COLLECT
-     ;
-
-tableRow :
-      identifier LEFT_PAREN INTEGER_VALUE RIGHT_PAREN
+    : FROM DUAL          #fromDual
+    | FROM relations     #fromRelations
     ;
 
 relations
@@ -1265,7 +1305,11 @@ relation
     ;
 
 joinRelation
-    : (joinType) JOIN distributeType? right=relationPrimary joinCriteria?
+    : (joinType) JOIN distributeType? right=relationPrimary matchCondition? joinCriteria?
+    ;
+
+matchCondition
+    : MATCH_CONDITION LEFT_PAREN valueExpression RIGHT_PAREN
     ;
 
 // Just like `opt_plan_hints` in legacy CUP parser.
@@ -1344,6 +1388,17 @@ lateralView
       tableName=identifier AS columnNames+=identifier (COMMA columnNames+=identifier)*
     ;
 
+unnest:
+    LATERAL? UNNEST LEFT_PAREN expression (COMMA expression)* RIGHT_PAREN (
+        WITH ORDINALITY
+    )? (
+        AS? tableName = identifier (
+            LEFT_PAREN columnNames += identifier (
+                COMMA columnNames += identifier
+            )* RIGHT_PAREN
+        )?
+    )?;
+
 queryOrganization
     : sortClause? limitClause?
     ;
@@ -1376,6 +1431,8 @@ joinType
     | RIGHT SEMI
     | LEFT ANTI
     | RIGHT ANTI
+    | ASOF LEFT?
+    | ASOF INNER
     ;
 
 joinCriteria
@@ -1403,6 +1460,7 @@ relationPrimary
       (properties=propertyItemList)?
       RIGHT_PAREN tableAlias                                                               #tableValuedFunction
     | LEFT_PAREN relations RIGHT_PAREN                                                     #relationList
+    | unnest                                                                               #unnestFunction
     ;
 
 materializedViewName
@@ -1411,6 +1469,10 @@ materializedViewName
 
 propertyClause
     : PROPERTIES LEFT_PAREN fileProperties=propertyItemList RIGHT_PAREN
+    ;
+
+propertyKeyClause
+    : PROPERTIES LEFT_PAREN keys+=propertyKey (COMMA keys+=propertyKey)* RIGHT_PAREN
     ;
 
 propertyItemList
@@ -1464,7 +1526,7 @@ indexDefs
     ;
 
 indexDef
-    : INDEX (ifNotExists=IF NOT EXISTS)? indexName=identifier cols=identifierList (USING indexType=(BITMAP | INVERTED | NGRAM_BF | ANN ))? (PROPERTIES LEFT_PAREN properties=propertyItemList RIGHT_PAREN)? (COMMENT comment=STRING_LITERAL)?
+    : INDEX (ifNotExists=IF NOT EXISTS)? indexName=identifier cols=identifierList (USING indexType=(INVERTED | NGRAM_BF | ANN ))? (PROPERTIES LEFT_PAREN properties=propertyItemList RIGHT_PAREN)? (COMMENT comment=STRING_LITERAL)?
     ;
 
 partitionsDef
@@ -1574,7 +1636,8 @@ predicate
     : NOT? kind=BETWEEN lower=valueExpression AND upper=valueExpression
     | NOT? kind=(REGEXP | RLIKE) pattern=valueExpression
     | NOT? kind=LIKE pattern=valueExpression (ESCAPE escape=valueExpression)?
-    | NOT? kind=(MATCH | MATCH_ANY | MATCH_ALL | MATCH_PHRASE | MATCH_PHRASE_PREFIX | MATCH_REGEXP | MATCH_PHRASE_EDGE) pattern=valueExpression
+    | NOT? kind=(MATCH | MATCH_ANY | MATCH_ALL | MATCH_PHRASE | MATCH_PHRASE_PREFIX | MATCH_REGEXP | MATCH_PHRASE_EDGE)
+        pattern=valueExpression (USING ANALYZER analyzer=identifierOrText)?
     | NOT? kind=IN LEFT_PAREN query RIGHT_PAREN
     | NOT? kind=IN LEFT_PAREN expression (COMMA expression)* RIGHT_PAREN
     | IS NOT? kind=NULL
@@ -1586,7 +1649,7 @@ valueExpression
     | operator=(SUBTRACT | PLUS | TILDE) valueExpression                                     #arithmeticUnary
     // split arithmeticBinary from 1 to 5 due to they have different operator precedence
     | left=valueExpression operator=HAT right=valueExpression                                #arithmeticBinary
-    | left=valueExpression operator=(ASTERISK | SLASH | MOD | DIV) right=valueExpression     #arithmeticBinary
+    | left=valueExpression operator=(ASTERISK | SLASH | MOD | MOD_ALT | DIV) right=valueExpression     #arithmeticBinary
     | left=valueExpression operator=(PLUS | SUBTRACT) right=valueExpression                  #arithmeticBinary
     | left=valueExpression operator=AMPERSAND right=valueExpression                          #arithmeticBinary
     | left=valueExpression operator=PIPE right=valueExpression                               #arithmeticBinary
@@ -1605,6 +1668,7 @@ primaryExpression
     | CASE value=expression whenClause+ (ELSE elseExpression=expression)? END                  #simpleCase
     | name=CAST LEFT_PAREN expression AS castDataType RIGHT_PAREN                              #cast
     | name=TRY_CAST LEFT_PAREN expression AS castDataType RIGHT_PAREN                           #tryCast
+    | DEFAULT LEFT_PAREN qualifiedName RIGHT_PAREN                                                 #defaultValue
     | constant                                                                                 #constantDefault
     | interval                                                                                 #intervalLiteral
     | ASTERISK (exceptOrReplace)*                                                              #star
@@ -1621,8 +1685,6 @@ primaryExpression
         (ORDER BY sortItem (COMMA sortItem)*)?
         (SEPARATOR sep=expression)? RIGHT_PAREN
         (OVER windowSpec)?                                                                     #groupConcat
-    | GET_FORMAT LEFT_PAREN
-        expression COMMA expression RIGHT_PAREN                                         #getFormatFunction
     | TRIM LEFT_PAREN
         ((BOTH | LEADING | TRAILING) expression? | expression) FROM expression RIGHT_PAREN     #trim
     | (SUBSTR | SUBSTRING | MID) LEFT_PAREN
@@ -1639,7 +1701,7 @@ primaryExpression
     | base=primaryExpression DOT fieldName=identifier                                          #dereference
     | LEFT_PAREN expression RIGHT_PAREN                                                        #parenthesizedExpression
     | KEY (dbName=identifier DOT)? keyName=identifier                                          #encryptKey
-    | EXTRACT LEFT_PAREN field=identifier FROM (DATE | TIMESTAMP)?
+    | EXTRACT LEFT_PAREN field=unitIdentifier FROM (DATE | TIMESTAMP)?
       source=valueExpression RIGHT_PAREN                                                       #extract
     | primaryExpression COLLATE (identifier | STRING_LITERAL | DEFAULT)                        #collate
     ;
@@ -1677,6 +1739,7 @@ functionNameIdentifier
     | CURRENT_USER
     | DATABASE
     | IF
+    | INTERVAL
     | LEFT
     | LIKE
     | PASSWORD
@@ -1755,7 +1818,10 @@ interval
     ;
 
 unitIdentifier
-	: YEAR | QUARTER | MONTH | WEEK | DAY | HOUR | MINUTE | SECOND | DAY_SECOND
+	: YEAR | QUARTER | MONTH | WEEK | DAY | HOUR | MINUTE | SECOND | MICROSECOND | YEAR_MONTH
+    | DAY_HOUR | DAY_MINUTE | DAY_SECOND | DAY_MICROSECOND | HOUR_MINUTE | HOUR_SECOND
+    | HOUR_MICROSECOND | MINUTE_SECOND | MINUTE_MICROSECOND | SECOND_MICROSECOND
+    | DAYOFWEEK | DAYOFYEAR | DOW | DOY
     ;
 
 dataTypeWithNullable
@@ -1790,6 +1856,7 @@ primitiveColType
     | type=DATETIMEV2
     | type=DATEV1
     | type=DATETIMEV1
+    | type=TIMESTAMPTZ
     | type=BITMAP
     | type=QUANTILE_STATE
     | type=HLL
@@ -1885,6 +1952,10 @@ number
     | SUBTRACT? (EXPONENT_VALUE | DECIMAL_VALUE) #decimalLiteral
     ;
 
+dollarQuotedString
+    : DOLLAR_QUOTED_STRING
+    ;
+
 // there are 1 kinds of keywords in Doris.
 // - Non-reserved keywords:
 //     normal version of non-reserved keywords.
@@ -1903,6 +1974,7 @@ nonReserved
     | ARRAY
     | AT
     | AUTHORS
+    | AUTHENTICATION
     | AUTO_INCREMENT
     | BACKENDS
     | BACKUP
@@ -1923,20 +1995,22 @@ nonReserved
     | BUCKETS
     | BUILD
     | BUILTIN
-    | BULK
     | CACHE
     | CACHED
     | CALL
+    | CANCEL
+    | CASE
+    | CAST
     | CATALOG
     | CATALOGS
     | CHAIN
+    | CIPHER
     | CHAR
     | CHARSET
     | CHECK
     | CLUSTER
     | CLUSTERS
     | COLLATION
-    | COLLECT
     | COLOCATE
     | COLUMNS
     | COMMENT
@@ -1972,7 +2046,13 @@ nonReserved
     | DATEV1
     | DATEV2
     | DAY
+    | DAYOFWEEK
+    | DAYOFYEAR
     | DAYS
+    | DAY_HOUR
+    | DAY_MICROSECOND
+    | DAY_MINUTE
+    | DAY_SECOND
     | DECIMAL
     | DECIMALV2
     | DECIMALV3
@@ -1986,6 +2066,8 @@ nonReserved
     | DISTINCTPCSA
     | DO
     | DORIS_INTERNAL_TABLE_ID
+    | DOW
+    | DOY
     | DUAL
     | DYNAMIC
     | E
@@ -2016,7 +2098,6 @@ nonReserved
     | FRONTENDS
     | FUNCTION
     | GENERATED
-    | GET_FORMAT
     | GENERIC
     | GLOBAL
     | GRAPH
@@ -2035,11 +2116,15 @@ nonReserved
     | HOTSPOT
     | HOUR
     | HOURS
+    | HOUR_MICROSECOND
+    | HOUR_MINUTE
+    | HOUR_SECOND
     | HUB
     | IDENTIFIED
     | IGNORE
     | IMMEDIATE
     | INCREMENTAL
+    | INTEGRATION
     | INDEXES
     | INSERT
     | INVERTED
@@ -2050,6 +2135,7 @@ nonReserved
     | IS_NULL_PRED
     | ISNULL
     | ISOLATION
+    | ISSUER
     | JOB
     | JOBS
     | JSON
@@ -2090,6 +2176,9 @@ nonReserved
     | MIN
     | MINUTE
     | MINUTES
+    | MINUTE_MICROSECOND
+    | MINUTE_SECOND
+    | MOD_ALT
     | MODIFY
     | MONTH
     | MTMV
@@ -2100,7 +2189,9 @@ nonReserved
     | NEXT
     | NGRAM_BF
     | NO
+    | NONE
     | NON_NULLABLE
+    | NORMALIZER
     | NULLS
     | OF
     | OFF
@@ -2109,6 +2200,7 @@ nonReserved
     | OPEN
     | OPTIMIZE
     | OPTIMIZED
+    | ORDINALITY
     | PARAMETER
     | PARSED
     | PASSWORD
@@ -2117,6 +2209,7 @@ nonReserved
     | PASSWORD_LOCK_TIME
     | PASSWORD_REUSE
     | PARTITIONS
+    | PACKAGES
     | PATH
     | PAUSE
     | PERCENT
@@ -2136,6 +2229,7 @@ nonReserved
     | PROFILE
     | PROPERTIES
     | PROPERTY
+    | PYTHON
     | QUANTILE_STATE
 	| QUANTILE_UNION
 	| QUARTER
@@ -2146,6 +2240,7 @@ nonReserved
     | RANDOM
     | RECENT
     | RECOVER
+    | RECURSIVE
     | RECYCLE
     | REFRESH
     | REPEATABLE
@@ -2161,6 +2256,7 @@ nonReserved
     | RESUME
     | RETAIN
     | RETENTION
+    | REQUIRE
     | RETURNS
     | REWRITTEN
     | RIGHT_BRACE
@@ -2172,10 +2268,13 @@ nonReserved
     | ROUTINE
     | S3
     | SAMPLE
+    | SAN
     | SCHEDULE
     | SCHEDULER
     | SCHEMA
     | SECOND
+    | SECOND_MICROSECOND
+    | MICROSECOND
     | SEPARATOR
     | SERIALIZABLE
     | SET_SESSION_VARIABLE
@@ -2200,6 +2299,7 @@ nonReserved
     | STREAMING
     | STRING
     | STRUCT
+    | SUBJECT
     | SUBSTR
     | SUBSTRING
     | SUM
@@ -2213,6 +2313,7 @@ nonReserved
     | THAN
     | TIME
     | TIMESTAMP
+    | TIMESTAMPTZ
     | TRANSACTION
     | TREE
     | TRIGGERS
@@ -2221,6 +2322,7 @@ nonReserved
     | TYPES
     | UNCOMMITTED
     | UNLOCK
+    | UNNEST
     | UNSET
     | UP
     | USER
@@ -2234,6 +2336,7 @@ nonReserved
     | VAULTS
     | VERBOSE
     | VERSION
+    | VERSIONS
     | VIEW
     | VIEWS
     | WARM
@@ -2241,5 +2344,6 @@ nonReserved
     | WEEK
     | WORK
     | YEAR
+    | YEAR_MONTH
 //--DEFAULT-NON-RESERVED-END
     ;

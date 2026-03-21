@@ -233,6 +233,8 @@ public class OperationType {
     public static final short OP_UPDATE_LOAD_JOB = 232;
     // fetch stream load record
     public static final short OP_FETCH_STREAM_LOAD_RECORD = 233;
+    // Note: The features related to 234 and 235 (SYNC JOB) have been removed from the kernel code.
+    // These operation types are kept for compatibility, but the corresponding functionality no longer exists.
     @Deprecated
     public static final short OP_CREATE_SYNC_JOB = 234;
     @Deprecated
@@ -416,6 +418,9 @@ public class OperationType {
     public static final short OP_DROP_INDEX_POLICY = 491;
 
     public static final short OP_OPERATE_KEY = 492;
+    public static final short OP_CREATE_AUTHENTICATION_INTEGRATION = 493;
+    public static final short OP_ALTER_AUTHENTICATION_INTEGRATION = 494;
+    public static final short OP_DROP_AUTHENTICATION_INTEGRATION = 495;
 
     // For cloud.
     public static final short OP_UPDATE_CLOUD_REPLICA = 1000;
@@ -424,6 +429,7 @@ public class OperationType {
     public static final short OP_MODIFY_CLOUD_WARM_UP_JOB = 1002;
 
     public static final short OP_BEGIN_SNAPSHOT = 1100;
+    public static final short OP_META_SYNC_POINT = 1101;
 
     /**
      * Get opcode name by op code.

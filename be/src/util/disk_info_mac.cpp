@@ -28,8 +28,8 @@
 #include <string>
 #include <vector>
 
-#include "disk_info.h"
 #include "io/fs/local_file_system.h"
+#include "util/disk_info.h"
 
 namespace doris {
 
@@ -157,6 +157,7 @@ Status DiskInfo::get_disk_devices(const std::vector<std::string>& paths,
             match_dev = info.first;
         }
         if (max_mount_size > 0) {
+            // The library function uses char* and `match_dev` is std::string, so use const_cast.
             devices->emplace(basename(const_cast<char*>(match_dev.c_str())));
         }
     }

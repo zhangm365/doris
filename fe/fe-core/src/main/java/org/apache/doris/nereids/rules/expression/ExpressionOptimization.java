@@ -29,11 +29,13 @@ import org.apache.doris.nereids.rules.expression.rules.ExtractCommonFactorRule;
 import org.apache.doris.nereids.rules.expression.rules.LikeToEqualRewrite;
 import org.apache.doris.nereids.rules.expression.rules.NestedCaseWhenCondToLiteral;
 import org.apache.doris.nereids.rules.expression.rules.NullSafeEqualToEqual;
+import org.apache.doris.nereids.rules.expression.rules.PushIntoCaseWhenBranch;
 import org.apache.doris.nereids.rules.expression.rules.SimplifyComparisonPredicate;
 import org.apache.doris.nereids.rules.expression.rules.SimplifyConflictCompound;
 import org.apache.doris.nereids.rules.expression.rules.SimplifyInPredicate;
 import org.apache.doris.nereids.rules.expression.rules.SimplifyRange;
 import org.apache.doris.nereids.rules.expression.rules.SimplifySelfComparison;
+import org.apache.doris.nereids.rules.expression.rules.SimplifyTimeFieldFromUnixtime;
 import org.apache.doris.nereids.rules.expression.rules.TopnToMax;
 
 import com.google.common.collect.ImmutableList;
@@ -55,6 +57,7 @@ public class ExpressionOptimization extends ExpressionRewrite {
                     // compound predicates
                     SimplifyRange.INSTANCE,
                     SimplifyConflictCompound.INSTANCE,
+                    SimplifyTimeFieldFromUnixtime.INSTANCE,
                     DistinctPredicatesRule.INSTANCE,
                     ExtractCommonFactorRule.INSTANCE,
 
@@ -64,6 +67,7 @@ public class ExpressionOptimization extends ExpressionRewrite {
                     NestedCaseWhenCondToLiteral.INSTANCE,
                     CaseWhenToIf.INSTANCE,
                     CaseWhenToCompoundPredicate.INSTANCE,
+                    PushIntoCaseWhenBranch.INSTANCE,
                     TopnToMax.INSTANCE,
                     NullSafeEqualToEqual.INSTANCE,
                     LikeToEqualRewrite.INSTANCE,

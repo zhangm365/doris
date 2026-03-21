@@ -17,14 +17,14 @@
 
 package org.apache.doris.planner;
 
-import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToThriftVisitor;
 import org.apache.doris.analysis.GroupingInfo;
 import org.apache.doris.thrift.TExplainLevel;
 import org.apache.doris.thrift.TPlanNode;
 import org.apache.doris.thrift.TPlanNodeType;
 import org.apache.doris.thrift.TRepeatNode;
 
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 
 import java.util.List;
 import java.util.Objects;
@@ -59,7 +59,8 @@ public class RepeatNode extends PlanNode {
     protected void toThrift(TPlanNode msg) {
         msg.node_type = TPlanNodeType.REPEAT_NODE;
         msg.repeat_node = new TRepeatNode(groupingInfo.getOutputTupleDesc().getId().asInt(), repeatSlotIdList,
-                groupingList.get(0), groupingList, allSlotId, Expr.treesToThrift(groupingInfo.getPreRepeatExprs()));
+                groupingList.get(0), groupingList, allSlotId,
+                ExprToThriftVisitor.treesToThrift(groupingInfo.getPreRepeatExprs()));
     }
 
     @Override
@@ -87,5 +88,9 @@ public class RepeatNode extends PlanNode {
     @Override
     public boolean isSerialOperator() {
         return children.get(0).isSerialOperator();
+    }
+
+    public GroupingInfo getGroupingInfo() {
+        return groupingInfo;
     }
 }

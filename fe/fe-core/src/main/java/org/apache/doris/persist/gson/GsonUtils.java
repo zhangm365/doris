@@ -85,6 +85,8 @@ import org.apache.doris.catalog.JdbcResource;
 import org.apache.doris.catalog.JdbcTable;
 import org.apache.doris.catalog.ListPartitionInfo;
 import org.apache.doris.catalog.ListPartitionItem;
+import org.apache.doris.catalog.LocalReplica;
+import org.apache.doris.catalog.LocalTablet;
 import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.MapType;
 import org.apache.doris.catalog.MysqlDBTable;
@@ -145,6 +147,7 @@ import org.apache.doris.datasource.iceberg.IcebergExternalTable;
 import org.apache.doris.datasource.iceberg.IcebergGlueExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergHMSExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergHadoopExternalCatalog;
+import org.apache.doris.datasource.iceberg.IcebergJdbcExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergRestExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergS3TablesExternalCatalog;
 import org.apache.doris.datasource.infoschema.ExternalInfoSchemaDatabase;
@@ -166,6 +169,7 @@ import org.apache.doris.datasource.paimon.PaimonExternalDatabase;
 import org.apache.doris.datasource.paimon.PaimonExternalTable;
 import org.apache.doris.datasource.paimon.PaimonFileExternalCatalog;
 import org.apache.doris.datasource.paimon.PaimonHMSExternalCatalog;
+import org.apache.doris.datasource.paimon.PaimonRestExternalCatalog;
 import org.apache.doris.datasource.test.TestExternalCatalog;
 import org.apache.doris.datasource.test.TestExternalDatabase;
 import org.apache.doris.datasource.test.TestExternalTable;
@@ -203,8 +207,6 @@ import org.apache.doris.load.routineload.RLTaskTxnCommitAttachment;
 import org.apache.doris.load.routineload.RoutineLoadJob;
 import org.apache.doris.load.routineload.RoutineLoadProgress;
 import org.apache.doris.load.routineload.kafka.KafkaDataSourceProperties;
-import org.apache.doris.load.sync.SyncJob;
-import org.apache.doris.load.sync.canal.CanalSyncJob;
 import org.apache.doris.mtmv.MTMVMaxTimestampSnapshot;
 import org.apache.doris.mtmv.MTMVSnapshotIdSnapshot;
 import org.apache.doris.mtmv.MTMVSnapshotIf;
@@ -381,11 +383,6 @@ public class GsonUtils {
         }
     }
 
-    // runtime adapter for class "SyncJob"
-    private static RuntimeTypeAdapterFactory<SyncJob> syncJobTypeAdapterFactory = RuntimeTypeAdapterFactory
-            .of(SyncJob.class, "clazz")
-            .registerSubtype(CanalSyncJob.class, CanalSyncJob.class.getSimpleName());
-
     // runtime adapter for class "LoadJobStateUpdateInfo"
     private static RuntimeTypeAdapterFactory<LoadJobStateUpdateInfo> loadJobStateUpdateInfoTypeAdapterFactory
             = RuntimeTypeAdapterFactory.of(LoadJobStateUpdateInfo.class, "clazz")
@@ -418,11 +415,13 @@ public class GsonUtils {
                 .registerSubtype(IcebergRestExternalCatalog.class, IcebergRestExternalCatalog.class.getSimpleName())
                 .registerSubtype(IcebergDLFExternalCatalog.class, IcebergDLFExternalCatalog.class.getSimpleName())
                 .registerSubtype(IcebergHadoopExternalCatalog.class, IcebergHadoopExternalCatalog.class.getSimpleName())
+                .registerSubtype(IcebergJdbcExternalCatalog.class, IcebergJdbcExternalCatalog.class.getSimpleName())
                 .registerSubtype(IcebergS3TablesExternalCatalog.class,
                         IcebergS3TablesExternalCatalog.class.getSimpleName())
                 .registerSubtype(PaimonExternalCatalog.class, PaimonExternalCatalog.class.getSimpleName())
                 .registerSubtype(PaimonHMSExternalCatalog.class, PaimonHMSExternalCatalog.class.getSimpleName())
                 .registerSubtype(PaimonFileExternalCatalog.class, PaimonFileExternalCatalog.class.getSimpleName())
+                .registerSubtype(PaimonRestExternalCatalog.class, PaimonRestExternalCatalog.class.getSimpleName())
                 .registerSubtype(MaxComputeExternalCatalog.class, MaxComputeExternalCatalog.class.getSimpleName())
                 .registerSubtype(
                             TrinoConnectorExternalCatalog.class, TrinoConnectorExternalCatalog.class.getSimpleName())
@@ -526,8 +525,7 @@ public class GsonUtils {
     // runtime adapter for class "CloudReplica".
     private static RuntimeTypeAdapterFactory<Replica> replicaTypeAdapterFactory = RuntimeTypeAdapterFactory
             .of(Replica.class, "clazz")
-            .registerDefaultSubtype(Replica.class)
-            .registerSubtype(Replica.class, Replica.class.getSimpleName())
+            .registerSubtype(LocalReplica.class, LocalReplica.class.getSimpleName())
             .registerSubtype(CloudReplica.class, CloudReplica.class.getSimpleName());
 
     private static RuntimeTypeAdapterFactory<Tablet> tabletTypeAdapterFactory;
@@ -535,13 +533,17 @@ public class GsonUtils {
     static {
         tabletTypeAdapterFactory = RuntimeTypeAdapterFactory
                 .of(Tablet.class, "clazz")
-                .registerSubtype(Tablet.class, Tablet.class.getSimpleName())
+                .registerSubtype(LocalTablet.class, LocalTablet.class.getSimpleName())
                 .registerSubtype(CloudTablet.class, CloudTablet.class.getSimpleName());
         if (Config.isNotCloudMode()) {
-            tabletTypeAdapterFactory.registerDefaultSubtype(Tablet.class);
+            tabletTypeAdapterFactory.registerDefaultSubtype(LocalTablet.class);
+            tabletTypeAdapterFactory.registerCompatibleSubtype(LocalTablet.class, Tablet.class.getSimpleName());
+            replicaTypeAdapterFactory.registerDefaultSubtype(LocalReplica.class);
+            replicaTypeAdapterFactory.registerCompatibleSubtype(LocalReplica.class, Replica.class.getSimpleName());
         } else {
             // compatible with old cloud code.
             tabletTypeAdapterFactory.registerDefaultSubtype(CloudTablet.class);
+            replicaTypeAdapterFactory.registerDefaultSubtype(CloudReplica.class);
         }
     }
 
@@ -627,7 +629,6 @@ public class GsonUtils {
             .registerTypeAdapterFactory(distributionInfoTypeAdapterFactory)
             .registerTypeAdapterFactory(resourceTypeAdapterFactory)
             .registerTypeAdapterFactory(alterJobV2TypeAdapterFactory)
-            .registerTypeAdapterFactory(syncJobTypeAdapterFactory)
             .registerTypeAdapterFactory(loadJobStateUpdateInfoTypeAdapterFactory)
             .registerTypeAdapterFactory(policyTypeAdapterFactory).registerTypeAdapterFactory(dsTypeAdapterFactory)
             .registerTypeAdapterFactory(dbTypeAdapterFactory).registerTypeAdapterFactory(tblTypeAdapterFactory)

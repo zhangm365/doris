@@ -17,6 +17,8 @@
 
 #include "cloud/cloud_cumulative_compaction.h"
 
+#include <gen_cpp/cloud.pb.h>
+
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_tablet_mgr.h"
 #include "cloud/config.h"
@@ -24,10 +26,9 @@
 #include "common/logging.h"
 #include "common/status.h"
 #include "cpp/sync_point.h"
-#include "gen_cpp/cloud.pb.h"
-#include "olap/compaction.h"
-#include "olap/cumulative_compaction_policy.h"
 #include "service/backend_options.h"
+#include "storage/compaction/compaction.h"
+#include "storage/compaction/cumulative_compaction_policy.h"
 #include "util/debug_points.h"
 #include "util/trace.h"
 #include "util/uuid_generator.h"
@@ -375,7 +376,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         if (_input_rowsets.size() == 1) {
             DCHECK_EQ(_output_rowset->version(), _input_rowsets[0]->version());
             // MUST NOT move input rowset to stale path
-            cloud_tablet()->add_rowsets({_output_rowset}, true, wrlock);
+            cloud_tablet()->add_rowsets({_output_rowset}, true, wrlock, true);
         } else {
             cloud_tablet()->delete_rowsets(_input_rowsets, wrlock);
             cloud_tablet()->add_rowsets({_output_rowset}, false, wrlock);
@@ -532,6 +533,8 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
         return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
                 "no suitable versions: only one rowset and not overlapping");
     }
+
+    apply_txn_size_truncation_and_log("CloudCumulativeCompaction");
     return Status::OK();
 }
 

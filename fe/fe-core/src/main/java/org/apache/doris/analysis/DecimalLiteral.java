@@ -19,22 +19,15 @@ package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.ScalarType;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
-import org.apache.doris.common.FormatOptions;
 import org.apache.doris.qe.SessionVariable;
-import org.apache.doris.thrift.TDecimalLiteral;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
 
 import com.google.common.base.Preconditions;
 import com.google.gson.annotations.SerializedName;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
@@ -47,18 +40,14 @@ public class DecimalLiteral extends NumericLiteralExpr {
     }
 
     public DecimalLiteral(BigDecimal value) {
-        this(value, Config.enable_decimal_conversion);
-    }
-
-    public DecimalLiteral(BigDecimal value, boolean isDecimalV3) {
-        init(value, isDecimalV3);
-        analysisDone();
+        init(value, Config.enable_decimal_conversion);
+        this.nullable = false;
     }
 
     public DecimalLiteral(BigDecimal value, Type type) {
         this.value = value;
         this.type = type;
-        analysisDone();
+        this.nullable = false;
     }
 
     public DecimalLiteral(String value) throws AnalysisException {
@@ -69,21 +58,7 @@ public class DecimalLiteral extends NumericLiteralExpr {
             throw new AnalysisException("Invalid floating-point literal: " + value, e);
         }
         init(v);
-        analysisDone();
-    }
-
-    public DecimalLiteral(String value, int scale) throws AnalysisException {
-        BigDecimal v = null;
-        try {
-            v = new BigDecimal(value);
-        } catch (NumberFormatException e) {
-            throw new AnalysisException("Invalid floating-point literal: " + value, e);
-        }
-        if (scale >= 0) {
-            v = v.setScale(scale, RoundingMode.HALF_UP);
-        }
-        init(v);
-        analysisDone();
+        this.nullable = false;
     }
 
     protected DecimalLiteral(DecimalLiteral other) {
@@ -258,25 +233,14 @@ public class DecimalLiteral extends NumericLiteralExpr {
                 return this.compareLiteral(decimalLiteral);
             } catch (AnalysisException e) {
                 throw new ClassCastException("Those two values cannot be compared: " + value
-                        + " and " + expr.toSqlImpl());
+                        + " and " + expr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
             }
         }
     }
 
     @Override
-    public String getStringValueForQuery(FormatOptions options) {
-        return value.toPlainString();
-    }
-
-    @Override
-    public String toSqlImpl() {
-        return getStringValue();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return getStringValue();
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitDecimalLiteral(this, context);
     }
 
     @Override
@@ -292,13 +256,6 @@ public class DecimalLiteral extends NumericLiteralExpr {
     @Override
     public double getDoubleValue() {
         return value.doubleValue();
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        // TODO(hujie01) deal with loss information
-        msg.node_type = TExprNodeType.DECIMAL_LITERAL;
-        msg.decimal_literal = new TDecimalLiteral(value.toPlainString());
     }
 
     // To be compatible with OLAP, only need 9 digits.

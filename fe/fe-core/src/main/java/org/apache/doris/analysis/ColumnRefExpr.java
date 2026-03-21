@@ -17,39 +17,37 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
-import org.apache.doris.nereids.util.Utils;
-import org.apache.doris.thrift.TColumnRef;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
+import org.apache.doris.common.NameFormatUtils;
 
 import java.util.Optional;
 
 public class ColumnRefExpr extends Expr {
     private String columnName;
     private int columnId;
-    private boolean isNullable;
 
-    public ColumnRefExpr() {
+    public ColumnRefExpr(boolean nullable) {
         super();
+        this.nullable = nullable;
     }
 
     public ColumnRefExpr(ColumnRefExpr rhs) {
         super(rhs);
         this.columnId = rhs.columnId;
         this.columnName = rhs.columnName;
-        this.isNullable = rhs.isNullable;
     }
 
     public String getName() {
         return columnName;
     }
 
+    public int getColumnId() {
+        return columnId;
+    }
+
     @Override
     public String getExprName() {
         if (!this.exprName.isPresent()) {
-            this.exprName = Optional.of(Utils.normalizeName(getName(), DEFAULT_EXPR_NAME));
+            this.exprName = Optional.of(NameFormatUtils.normalizeName(getName(), DEFAULT_EXPR_NAME));
         }
         return this.exprName.get();
     }
@@ -63,32 +61,8 @@ public class ColumnRefExpr extends Expr {
     }
 
     @Override
-    public boolean isNullable() {
-        return isNullable;
-    }
-
-    public void setNullable(boolean nullable) {
-        this.isNullable = nullable;
-    }
-
-    @Override
-    protected String toSqlImpl() {
-        return columnName;
-    }
-
-    @Override
-    protected String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return columnName;
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.COLUMN_REF;
-        TColumnRef columnRef = new TColumnRef();
-        columnRef.setColumnId(columnId);
-        columnRef.setColumnName(columnName);
-        msg.column_ref = columnRef;
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitColumnRefExpr(this, context);
     }
 
     @Override

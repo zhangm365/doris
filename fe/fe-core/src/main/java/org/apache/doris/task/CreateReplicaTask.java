@@ -17,7 +17,6 @@
 
 package org.apache.doris.task;
 
-import org.apache.doris.alter.SchemaChangeHandler;
 import org.apache.doris.analysis.DataSortInfo;
 import org.apache.doris.catalog.BinlogConfig;
 import org.apache.doris.catalog.Column;
@@ -26,9 +25,11 @@ import org.apache.doris.catalog.Index;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.common.MarkedCountDownLatch;
 import org.apache.doris.common.Status;
+import org.apache.doris.common.util.ColumnsUtil;
 import org.apache.doris.policy.Policy;
 import org.apache.doris.policy.PolicyTypeEnum;
 import org.apache.doris.thrift.TColumn;
+import org.apache.doris.thrift.TColumnGroup;
 import org.apache.doris.thrift.TCompressionType;
 import org.apache.doris.thrift.TCreateTabletReq;
 import org.apache.doris.thrift.TEncryptionAlgorithm;
@@ -43,7 +44,7 @@ import org.apache.doris.thrift.TTabletSchema;
 import org.apache.doris.thrift.TTabletType;
 import org.apache.doris.thrift.TTaskType;
 
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -124,6 +125,8 @@ public class CreateReplicaTask extends AgentTask {
 
     private long timeSeriesCompactionLevelThreshold;
 
+    private int verticalCompactionNumColumnsPerGroup;
+
     private boolean storeRowColumn;
 
     private BinlogConfig binlogConfig;
@@ -135,6 +138,7 @@ public class CreateReplicaTask extends AgentTask {
     private boolean variantEnableFlattenNested;
 
     private TEncryptionAlgorithm tdeAlgorithm;
+    private Map<String, List<String>> columnSeqMapping;
 
     public CreateReplicaTask(long backendId, long dbId, long tableId, long partitionId, long indexId, long tabletId,
                              long replicaId, short shortKeyColumnCount, int schemaHash, long version,
@@ -163,7 +167,8 @@ public class CreateReplicaTask extends AgentTask {
                              long rowStorePageSize,
                              boolean variantEnableFlattenNested,
                              long storagePageSize, TEncryptionAlgorithm tdeAlgorithm,
-                             long storageDictPageSize) {
+                             long storageDictPageSize, Map<String, List<String>> columnSeqMapping,
+                             int verticalCompactionNumColumnsPerGroup) {
         super(null, backendId, TTaskType.CREATE, dbId, tableId, partitionId, indexId, tabletId);
 
         this.replicaId = replicaId;
@@ -206,6 +211,7 @@ public class CreateReplicaTask extends AgentTask {
         this.timeSeriesCompactionTimeThresholdSeconds = timeSeriesCompactionTimeThresholdSeconds;
         this.timeSeriesCompactionEmptyRowsetsThreshold = timeSeriesCompactionEmptyRowsetsThreshold;
         this.timeSeriesCompactionLevelThreshold = timeSeriesCompactionLevelThreshold;
+        this.verticalCompactionNumColumnsPerGroup = verticalCompactionNumColumnsPerGroup;
         this.storeRowColumn = storeRowColumn;
         this.binlogConfig = binlogConfig;
         this.objectPool = objectPool;
@@ -214,6 +220,7 @@ public class CreateReplicaTask extends AgentTask {
         this.storagePageSize = storagePageSize;
         this.storageDictPageSize = storageDictPageSize;
         this.tdeAlgorithm = tdeAlgorithm;
+        this.columnSeqMapping = columnSeqMapping;
     }
 
     public void setIsRecoverTask(boolean isRecoverTask) {
@@ -318,9 +325,9 @@ public class CreateReplicaTask extends AgentTask {
                 }
                 // when doing schema change, some modified column has a prefix in name.
                 // this prefix is only used in FE, not visible to BE, so we should remove this prefix.
-                if (column.getName().startsWith(SchemaChangeHandler.SHADOW_NAME_PREFIX)) {
+                if (column.getName().startsWith(Column.SHADOW_NAME_PREFIX)) {
                     tColumn.setColumnName(
-                            column.getName().substring(SchemaChangeHandler.SHADOW_NAME_PREFIX.length()));
+                            column.getName().substring(Column.SHADOW_NAME_PREFIX.length()));
                 }
                 tColumn.setVisible(column.isVisible());
                 tColumns.add(tColumn);
@@ -362,7 +369,6 @@ public class CreateReplicaTask extends AgentTask {
                 }
             }
             tSchema.setIndexes(tIndexes);
-            storageFormat = TStorageFormat.V2;
         }
 
         if (bfColumns != null) {
@@ -377,6 +383,23 @@ public class CreateReplicaTask extends AgentTask {
         tSchema.setRowStorePageSize(rowStorePageSize);
         tSchema.setStoragePageSize(storagePageSize);
         tSchema.setStorageDictPageSize(storageDictPageSize);
+
+        // set sequence map
+        List<TColumnGroup> resultSeqMap = null;
+        if (columnSeqMapping != null && columnSeqMapping.size() != 0) {
+            ColumnsUtil columnsUtil = new ColumnsUtil(columns);
+            resultSeqMap = new ArrayList<>();
+            for (Map.Entry<String, List<String>> entry : columnSeqMapping.entrySet()) {
+                int sequenceColumnId = columnsUtil.getColumnUniqueId(entry.getKey());
+                List<Integer> columnIds = columnsUtil.getColumnUniqueId(entry.getValue());
+                TColumnGroup tmpColumnGroup = new TColumnGroup();
+                tmpColumnGroup.setSequenceColumn(sequenceColumnId);
+                tmpColumnGroup.setColumnsInGroup(columnIds);
+                resultSeqMap.add(tmpColumnGroup);
+            }
+        }
+        tSchema.setSeqMap(resultSeqMap);
+
         createTabletReq.setTabletSchema(tSchema);
 
         createTabletReq.setVersion(version);
@@ -424,6 +447,7 @@ public class CreateReplicaTask extends AgentTask {
         createTabletReq.setTimeSeriesCompactionTimeThresholdSeconds(timeSeriesCompactionTimeThresholdSeconds);
         createTabletReq.setTimeSeriesCompactionEmptyRowsetsThreshold(timeSeriesCompactionEmptyRowsetsThreshold);
         createTabletReq.setTimeSeriesCompactionLevelThreshold(timeSeriesCompactionLevelThreshold);
+        createTabletReq.setVerticalCompactionNumColumnsPerGroup(verticalCompactionNumColumnsPerGroup);
         createTabletReq.setTdeAlgorithm(tdeAlgorithm);
 
         if (binlogConfig != null) {

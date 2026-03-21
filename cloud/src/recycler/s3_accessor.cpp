@@ -372,13 +372,9 @@ int S3Accessor::init() {
         options.Retry.MaxRetries = config::max_s3_client_retry;
         auto cred =
                 std::make_shared<Azure::Storage::StorageSharedKeyCredential>(conf_.ak, conf_.sk);
-        if (config::force_azure_blob_global_endpoint) {
-            uri_ = fmt::format("https://{}.blob.core.windows.net/{}", conf_.ak, conf_.bucket);
-        } else {
-            uri_ = fmt::format("{}/{}", conf_.endpoint, conf_.bucket);
-            if (uri_.find("://") == std::string::npos) {
-                uri_ = "https://" + uri_;
-            }
+        uri_ = fmt::format("{}/{}", conf_.endpoint, conf_.bucket);
+        if (uri_.find("://") == std::string::npos) {
+            uri_ = "https://" + uri_;
         }
         uri_ = normalize_http_uri(uri_);
         // In Azure's HTTP requests, all policies in the vector are called in a chained manner following the HTTP pipeline approach.
@@ -502,9 +498,10 @@ int S3Accessor::put_file(const std::string& path, const std::string& content) {
 }
 
 int S3Accessor::list_prefix(const std::string& path_prefix, std::unique_ptr<ListIterator>* res) {
+    size_t prefix_length = conf_.prefix.empty() ? 0 : conf_.prefix.length() + 1;
     *res = std::make_unique<S3ListIterator>(
-            obj_client_->list_objects({conf_.bucket, get_key(path_prefix)}),
-            conf_.prefix.length() + 1 /* {prefix}/ */);
+            obj_client_->list_objects({.bucket = conf_.bucket, .key = get_key(path_prefix)}),
+            prefix_length);
     return 0;
 }
 

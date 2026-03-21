@@ -24,9 +24,9 @@
 
 #include "cloud/cloud_tablet.h"
 #include "common/status.h"
-#include "olap/rowset/rowset_fwd.h"
-#include "olap/storage_policy.h"
-#include "olap/tablet_fwd.h"
+#include "storage/rowset/rowset_fwd.h"
+#include "storage/storage_policy.h"
+#include "storage/tablet/tablet_fwd.h"
 
 namespace doris {
 class CloudStorageEngine;
@@ -89,6 +89,9 @@ private:
                                StorageResource& storage_resource, TabletSchemaSPtr tablet_schema,
                                std::unordered_map<std::string, std::string>& file_mapping,
                                std::unordered_map<RowsetId, RowsetId>& rowset_id_mapping);
+
+    Status _rename_index_ids(TabletSchemaPB& schema_pb,
+                             const TabletSchemaSPtr& tablet_schema) const;
 
 private:
     CloudStorageEngine& _engine;

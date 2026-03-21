@@ -773,10 +773,6 @@ The Apache Software License, Version 2.0
         - commons-digester:commons-digester:1.8 (http://jakarta.apache.org/commons/digester/)
     * EL:
         - commons-el:commons-el:1.0 (http://jakarta.apache.org/commons/el/)
-    * Fabric8 :: Kubernetes :: Java Client:
-        - io.fabric8:kubernetes-client:5.12.2 (http://fabric8.io/kubernetes-client/)
-    * Fabric8 :: Kubernetes Model:
-        - io.fabric8:kubernetes-model:5.12.2 (http://fabric8.io/kubernetes-model/)
     * FindBugs-jsr305:
         - com.google.code.findbugs:jsr305:3.0.0 (http://findbugs.sourceforge.net/)
         - com.google.code.findbugs:jsr305:3.0.2 (http://findbugs.sourceforge.net/)
@@ -1089,7 +1085,7 @@ The Apache Software License, Version 2.0
     * fastjson:
         - com.alibaba:fastjson:1.2.58 (https://github.com/alibaba/fastjson)
     * fastutil:
-        - it.unimi.dsi:fastutil:6.5.6 (http://fasutil.dsi.unimi.it/)
+        - it.unimi.dsi:fastutil:8.5.18 (http://fastutil.di.unimi.it/)
     * fe-common:
         - org.apache.doris:fe-common:0.15-SNAPSHOT (https://doris.apache.org/fe-common/)
     * hadoop-mapreduce-client-app:

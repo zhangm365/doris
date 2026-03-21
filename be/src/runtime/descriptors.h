@@ -25,8 +25,8 @@
 #include <gen_cpp/Types_types.h>
 #include <glog/logging.h>
 #include <google/protobuf/stubs/port.h>
-#include <stdint.h>
 
+#include <cstdint>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -38,10 +38,10 @@
 #include "common/global_types.h"
 #include "common/object_pool.h"
 #include "common/status.h"
-#include "olap/utils.h"
-#include "runtime/define_primitive_type.h"
-#include "runtime/types.h"
-#include "vec/data_types/data_type.h"
+#include "core/data_type/data_type.h"
+#include "core/data_type/define_primitive_type.h"
+#include "storage/utils.h"
+
 namespace google::protobuf {
 template <typename Element>
 class RepeatedField;
@@ -53,20 +53,21 @@ class ObjectPool;
 class PTupleDescriptor;
 class PSlotDescriptor;
 
+using TColumnAccessPaths = std::vector<TColumnAccessPath>;
+
 class SlotDescriptor {
 public:
     MOCK_DEFINE(virtual ~SlotDescriptor() = default;)
     SlotId id() const { return _id; }
-    const vectorized::DataTypePtr type() const { return _type; }
+    DataTypePtr type() const { return _type; }
     TupleId parent() const { return _parent; }
     // Returns the column index of this slot, including partition keys.
     // (e.g., col_pos - num_partition_keys = the table column this slot corresponds to)
     int col_pos() const { return _col_pos; }
     // Returns the field index in the generated llvm struct for this slot's tuple
     int field_idx() const { return _field_idx; }
-    bool is_materialized() const { return _is_materialized; }
     bool is_nullable() const;
-    vectorized::DataTypePtr get_data_type_ptr() const;
+    DataTypePtr get_data_type_ptr() const;
 
     const std::string& col_name() const { return _col_name; }
     const std::string& col_name_lower_case() const { return _col_name_lower_case; }
@@ -75,12 +76,15 @@ public:
 
     std::string debug_string() const;
 
-    vectorized::MutableColumnPtr get_empty_mutable_column() const;
+    MutableColumnPtr get_empty_mutable_column() const;
 
     MOCK_FUNCTION int32_t col_unique_id() const { return _col_unique_id; }
 
     bool is_key() const { return _is_key; }
     const std::vector<std::string>& column_paths() const { return _column_paths; };
+
+    const TColumnAccessPaths& all_access_paths() const { return _all_access_paths; }
+    const TColumnAccessPaths& predicate_access_paths() const { return _predicate_access_paths; }
 
     bool is_auto_increment() const { return _is_auto_increment; }
 
@@ -95,6 +99,10 @@ public:
         return virtual_column_expr;
     }
 
+    void set_is_predicate(bool is_predicate) { _is_predicate = is_predicate; }
+
+    bool is_predicate() const { return _is_predicate; }
+
 private:
     friend class DescriptorTbl;
     friend class TupleDescriptor;
@@ -106,7 +114,7 @@ private:
     friend class TabletSchema;
 
     MOCK_REMOVE(const) SlotId _id;
-    MOCK_REMOVE(const) vectorized::DataTypePtr _type;
+    MOCK_REMOVE(const) DataTypePtr _type;
     const TupleId _parent;
     const int _col_pos;
     MOCK_REMOVE(const) std::string _col_name;
@@ -123,15 +131,18 @@ private:
     // leading null bytes.
     int _field_idx;
 
-    const bool _is_materialized;
-
     const bool _is_key;
     const std::vector<std::string> _column_paths;
+
+    TColumnAccessPaths _all_access_paths;
+    TColumnAccessPaths _predicate_access_paths;
 
     const bool _is_auto_increment;
     const std::string _col_default_value;
 
     std::shared_ptr<doris::TExpr> virtual_column_expr = nullptr;
+
+    bool _is_predicate = false;
 
     SlotDescriptor(const TSlotDescriptor& tdesc);
     SlotDescriptor(const PSlotDescriptor& pdesc);
@@ -233,18 +244,20 @@ public:
     std::string endpoint() const { return _endpoint; }
     std::string quota() const { return _quota; }
     Status init_status() const { return _init_status; }
+    std::map<std::string, std::string> properties() const { return _props; }
 
 private:
     std::string _region; //deprecated
     std::string _project;
     std::string _table;
-    std::string _odps_url;   //deprecated
-    std::string _tunnel_url; //deprecated
-    std::string _access_key;
-    std::string _secret_key;
+    std::string _odps_url;      //deprecated
+    std::string _tunnel_url;    //deprecated
+    std::string _access_key;    //deprecated
+    std::string _secret_key;    //deprecated
     std::string _public_access; //deprecated
     std::string _endpoint;
     std::string _quota;
+    std::map<std::string, std::string> _props;
     Status _init_status = Status::OK();
 };
 
@@ -444,13 +457,11 @@ private:
 // case)
 class RowDescriptor {
 public:
-    RowDescriptor(const DescriptorTbl& desc_tbl, const std::vector<TTupleId>& row_tuples,
-                  const std::vector<bool>& nullable_tuples);
+    RowDescriptor(const DescriptorTbl& desc_tbl, const std::vector<TTupleId>& row_tuples);
 
     // standard copy c'tor, made explicit here
     RowDescriptor(const RowDescriptor& desc)
             : _tuple_desc_map(desc._tuple_desc_map),
-              _tuple_idx_nullable_map(desc._tuple_idx_nullable_map),
               _tuple_idx_map(desc._tuple_idx_map),
               _has_varlen_slots(desc._has_varlen_slots) {
         auto it = desc._tuple_desc_map.begin();
@@ -460,7 +471,7 @@ public:
         }
     }
 
-    RowDescriptor(TupleDescriptor* tuple_desc, bool is_nullable);
+    RowDescriptor(TupleDescriptor* tuple_desc);
 
     RowDescriptor(const RowDescriptor& lhs_row_desc, const RowDescriptor& rhs_row_desc);
 
@@ -499,7 +510,7 @@ public:
 
     std::string debug_string() const;
 
-    int get_column_id(int slot_id, bool force_materialize_slot = false) const;
+    int get_column_id(int slot_id) const;
 
 private:
     // Initializes tupleIdxMap during c'tor using the _tuple_desc_map.
@@ -510,9 +521,6 @@ private:
 
     // map from position of tuple w/in row to its descriptor
     std::vector<TupleDescriptor*> _tuple_desc_map;
-
-    // _tuple_idx_nullable_map[i] is true if tuple i can be null
-    std::vector<bool> _tuple_idx_nullable_map;
 
     // map from TupleId to position of tuple w/in row
     std::vector<int> _tuple_idx_map;

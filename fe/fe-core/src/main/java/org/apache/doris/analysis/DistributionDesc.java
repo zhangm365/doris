@@ -22,6 +22,7 @@ import org.apache.doris.catalog.DistributionInfo;
 import org.apache.doris.catalog.DistributionInfo.DistributionInfoType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
+import org.apache.doris.nereids.trees.plans.commands.info.DistributionDescriptor;
 
 import org.apache.commons.lang3.NotImplementedException;
 
@@ -46,10 +47,6 @@ public class DistributionDesc {
         return numBucket;
     }
 
-    public int setBuckets(int numBucket) {
-        return this.numBucket = numBucket;
-    }
-
     public boolean isAutoBucket() {
         return autoBucket;
     }
@@ -70,7 +67,7 @@ public class DistributionDesc {
         throw new NotImplementedException("getDistributionColumnNames not implemented");
     }
 
-    public boolean inDistributionColumns(String columnName) {
-        return getDistributionColumnNames() != null && getDistributionColumnNames().contains(columnName);
+    public DistributionDescriptor toDistributionDescriptor() {
+        throw new NotImplementedException("toDistributionDescriptor not implemented");
     }
 }

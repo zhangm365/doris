@@ -51,6 +51,7 @@ struct TTabletSchema {
     22: optional bool variant_enable_flatten_nested = false
     23: optional i64 storage_page_size = 65536
     24: optional i64 storage_dict_page_size = 262144
+    25: optional list<Types.TColumnGroup> seq_map
 }
 
 // this enum stands for different storage format in src_backends
@@ -59,7 +60,9 @@ struct TTabletSchema {
 enum TStorageFormat {
     DEFAULT = 0,
     V1 = 1,
-    V2 = 2
+    V2 = 2,
+    // V3 stands externalized column meta (CMO)
+    V3 = 3
 }
 
 enum TEncryptionAlgorithm {
@@ -139,7 +142,8 @@ enum TIndexPolicyType {
     ANALYZER,
     TOKENIZER,
     TOKEN_FILTER,
-    CHAR_FILTER
+    CHAR_FILTER,
+    NORMALIZER
 }
 
 struct TIndexPolicy {
@@ -158,6 +162,7 @@ struct TCleanTrashReq {}
 
 struct TCleanUDFCacheReq {
     1: optional string function_signature //function_name(arg_type)
+    2: optional i64 function_id // function id for cleaning cached library files
 }
 
 enum TCompressionType {
@@ -224,6 +229,7 @@ struct TCreateTabletReq {
     28: optional TInvertedIndexStorageFormat inverted_index_storage_format = TInvertedIndexStorageFormat.DEFAULT // Deprecated
     29: optional Types.TInvertedIndexFileStorageFormat inverted_index_file_storage_format = Types.TInvertedIndexFileStorageFormat.V2
     30: optional TEncryptionAlgorithm tde_algorithm
+    31: optional i32 vertical_compaction_num_columns_per_group = 5
 
     // For cloud
     1000: optional bool is_in_memory = false
@@ -270,6 +276,8 @@ struct TAlterTabletReqV2 {
     9: optional Descriptors.TDescriptorTable desc_tbl
     10: optional list<Descriptors.TColumn> columns
     11: optional i32 be_exec_version = 0
+    12: optional PaloInternalService.TQueryGlobals query_globals
+    13: optional PaloInternalService.TQueryOptions query_options
 
     // For cloud
     1000: optional i64 job_id
@@ -536,6 +544,7 @@ struct TTabletMetaInfo {
     16: optional bool disable_auto_compaction
     17: optional i64 time_series_compaction_empty_rowsets_threshold
     18: optional i64 time_series_compaction_level_threshold
+    19: optional i32 vertical_compaction_num_columns_per_group
 }
 
 struct TUpdateTabletMetaInfoReq {
@@ -557,6 +566,14 @@ struct TCooldownConf {
 
 struct TPushCooldownConfReq {
     1: required list<TCooldownConf> cooldown_confs
+}
+
+// Request to make temporary cloud rowsets visible
+struct TMakeCloudTmpRsVisibleRequest {
+    1: required i64 txn_id
+    2: required list<Types.TTabletId> tablet_ids // tablets on this BE involved in the transaction
+    3: required map<Types.TPartitionId, Types.TVersion> partition_version_map
+    4: optional i64 version_update_time_ms
 }
 
 struct TAgentTaskRequest {
@@ -601,6 +618,7 @@ struct TAgentTaskRequest {
 
     // For cloud
     1000: optional TCalcDeleteBitmapRequest calc_delete_bitmap_req
+    1001: optional TMakeCloudTmpRsVisibleRequest make_cloud_tmp_rs_visible_req
 }
 
 struct TAgentResult {

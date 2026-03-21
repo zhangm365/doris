@@ -18,8 +18,8 @@
 package org.apache.doris.nereids.trees.plans.commands.info;
 
 import org.apache.doris.alter.AlterOpType;
-import org.apache.doris.analysis.AlterTableClause;
-import org.apache.doris.analysis.CreateOrReplaceBranchClause;
+import org.apache.doris.catalog.info.BranchOptions;
+import org.apache.doris.catalog.info.CreateOrReplaceBranchInfo;
 
 import java.util.Map;
 
@@ -65,8 +65,7 @@ public class CreateOrReplaceBranchOp extends AlterTableOp {
         return null;
     }
 
-    @Override
-    public AlterTableClause translateToLegacyAlterClause() {
-        return new CreateOrReplaceBranchClause(branchInfo);
+    public CreateOrReplaceBranchInfo getBranchInfo() {
+        return branchInfo;
     }
 }

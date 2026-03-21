@@ -69,6 +69,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -91,12 +92,12 @@ public class DictionaryManager extends MasterDaemon implements Writable {
 
     // Map of database name -> dictionary name -> dictionary id
     @SerializedName(value = "ids")
-    private Map<String, Map<String, Long>> dictionaryIds = Maps.newConcurrentMap();
+    private ConcurrentMap<String, ConcurrentMap<String, Long>> dictionaryIds = Maps.newConcurrentMap();
     // dbname -> tablename -> dict id
     @SerializedName(value = "t")
-    private Map<String, ListMultimap<String, Long>> dbTableToDicIds = Maps.newConcurrentMap();
+    private ConcurrentMap<String, ListMultimap<String, Long>> dbTableToDicIds = Maps.newConcurrentMap();
     @SerializedName(value = "idmap")
-    private Map<Long, Dictionary> idToDictionary = Maps.newConcurrentMap();
+    private ConcurrentMap<Long, Dictionary> idToDictionary = Maps.newConcurrentMap();
 
     @SerializedName(value = "i")
     private long uniqueId = 0;
@@ -417,12 +418,12 @@ public class DictionaryManager extends MasterDaemon implements Writable {
         }
 
         // not use rerfresh command's executor to avoid potential problems.
-        StmtExecutor executor = InsertTask.makeStmtExecutor(ctx);
+        String insertSql = "insert into " + dictionary.getDbName() + "." + dictionary.getName() + " select * from "
+                + dictionary.getSourceCtlName() + "." + dictionary.getSourceDbName() + "."
+                + dictionary.getSourceTableName();
+        StmtExecutor executor = new StmtExecutor(ctx, insertSql);
         NereidsParser parser = new NereidsParser();
-        InsertIntoTableCommand baseCommand = (InsertIntoTableCommand) parser
-                .parseSingle("insert into " + dictionary.getDbName() + "." + dictionary.getName() + " select * from "
-                        + dictionary.getSourceCtlName() + "." + dictionary.getSourceDbName() + "."
-                        + dictionary.getSourceTableName());
+        InsertIntoTableCommand baseCommand = (InsertIntoTableCommand) parser.parseSingle(insertSql);
         LOG.info("Loading to dictionary {} with query {}. adaptive: {}", dictionary.getName(), ctx.queryId(),
                 adaptiveLoad);
         if (!baseCommand.getLabelName().isPresent()) {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "vec/exprs/virtual_slot_ref.h"
+#include "exprs/virtual_slot_ref.h"
 
 #include <gen_cpp/Exprs_types.h>
 #include <gen_cpp/Types_types.h>
@@ -25,12 +25,12 @@
 #include <string>
 
 #include "common/object_pool.h"
+#include "core/data_type/data_type_string.h"
+#include "exprs/vexpr_context.h"
 #include "runtime/descriptors.h"
 #include "testutil/mock/mock_runtime_state.h"
-#include "vec/data_types/data_type_string.h"
-#include "vec/exprs/vexpr_context.h"
 
-namespace doris::vectorized {
+namespace doris {
 
 class VirtualSlotRefTest : public testing::Test {
 public:
@@ -81,7 +81,6 @@ protected:
         slot_desc->_id = SlotId(slot_id);
         slot_desc->_col_name = col_name;
         slot_desc->_type = data_type;
-        // Note: _is_materialized is const, so it's set during construction
         return slot_desc;
     }
 
@@ -171,6 +170,11 @@ TEST_F(VirtualSlotRefTest, EqualsFunction_WithDifferentTypes) {
         Status execute(VExprContext* context, Block* block, int* result_column_id) const override {
             return Status::OK();
         }
+        Status execute_column(VExprContext* context, const Block* block, Selector* selector,
+                              size_t count, ColumnPtr& result_column) const override {
+            return Status::OK();
+        }
+
         const std::string& expr_name() const override {
             static std::string name = "mock";
             return name;
@@ -286,6 +290,12 @@ TEST_F(VirtualSlotRefTest, EqualsFunction_TestAllBranches) {
         Status execute(VExprContext* context, Block* block, int* result_column_id) const override {
             return Status::OK();
         }
+
+        Status execute_column(VExprContext* context, const Block* block, Selector* selector,
+                              size_t count, ColumnPtr& result_column) const override {
+            return Status::OK();
+        }
+
         const std::string& expr_name() const override {
             static std::string name = "different";
             return name;
@@ -304,6 +314,10 @@ TEST_F(VirtualSlotRefTest, EqualsFunction_TestAllBranches) {
             _node_type = TExprNodeType::VIRTUAL_SLOT_REF; // Same type but different class
         }
         Status execute(VExprContext* context, Block* block, int* result_column_id) const override {
+            return Status::OK();
+        }
+        Status execute_column(VExprContext* context, const Block* block, Selector* selector,
+                              size_t count, ColumnPtr& result_column) const override {
             return Status::OK();
         }
         const std::string& expr_name() const override {
@@ -370,4 +384,4 @@ TEST_F(VirtualSlotRefTest, MemoryEstimate) {
     EXPECT_EQ(virtual_ref.estimate_memory(1000), 0); // Should return 0 as per implementation
 }
 
-} // namespace doris::vectorized
+} // namespace doris

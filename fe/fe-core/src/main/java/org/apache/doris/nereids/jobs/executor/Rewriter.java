@@ -31,6 +31,7 @@ import org.apache.doris.nereids.rules.analysis.NormalizeAggregate;
 import org.apache.doris.nereids.rules.expression.CheckLegalityAfterRewrite;
 import org.apache.doris.nereids.rules.expression.ExpressionNormalizationAndOptimization;
 import org.apache.doris.nereids.rules.expression.ExpressionRewrite;
+import org.apache.doris.nereids.rules.expression.MergeGuardExpr;
 import org.apache.doris.nereids.rules.expression.NullableDependentExpressionRewrite;
 import org.apache.doris.nereids.rules.expression.QueryColumnCollector;
 import org.apache.doris.nereids.rules.rewrite.AddDefaultLimit;
@@ -59,6 +60,7 @@ import org.apache.doris.nereids.rules.rewrite.ConvertOuterJoinToAntiJoin;
 import org.apache.doris.nereids.rules.rewrite.CountDistinctRewrite;
 import org.apache.doris.nereids.rules.rewrite.CountLiteralRewrite;
 import org.apache.doris.nereids.rules.rewrite.CreatePartitionTopNFromWindow;
+import org.apache.doris.nereids.rules.rewrite.DecomposeRepeatWithPreAggregation;
 import org.apache.doris.nereids.rules.rewrite.DecoupleEncodeDecode;
 import org.apache.doris.nereids.rules.rewrite.DeferMaterializeTopNResult;
 import org.apache.doris.nereids.rules.rewrite.DistinctAggStrategySelector;
@@ -98,6 +100,7 @@ import org.apache.doris.nereids.rules.rewrite.InferPredicates;
 import org.apache.doris.nereids.rules.rewrite.InferSetOperatorDistinct;
 import org.apache.doris.nereids.rules.rewrite.InitJoinOrder;
 import org.apache.doris.nereids.rules.rewrite.InlineLogicalView;
+import org.apache.doris.nereids.rules.rewrite.JoinExtractOrFromCaseWhen;
 import org.apache.doris.nereids.rules.rewrite.LimitAggToTopNAgg;
 import org.apache.doris.nereids.rules.rewrite.LimitSortToTopN;
 import org.apache.doris.nereids.rules.rewrite.LogicalResultSinkToShortCircuitPointQuery;
@@ -109,6 +112,7 @@ import org.apache.doris.nereids.rules.rewrite.MergeProjectable;
 import org.apache.doris.nereids.rules.rewrite.MergeSetOperations;
 import org.apache.doris.nereids.rules.rewrite.MergeSetOperationsExcept;
 import org.apache.doris.nereids.rules.rewrite.MergeTopNs;
+import org.apache.doris.nereids.rules.rewrite.NestedColumnPruning;
 import org.apache.doris.nereids.rules.rewrite.NormalizeSort;
 import org.apache.doris.nereids.rules.rewrite.OperativeColumnDerive;
 import org.apache.doris.nereids.rules.rewrite.OrExpansion;
@@ -124,7 +128,6 @@ import org.apache.doris.nereids.rules.rewrite.PullUpProjectUnderApply;
 import org.apache.doris.nereids.rules.rewrite.PullUpProjectUnderLimit;
 import org.apache.doris.nereids.rules.rewrite.PullUpProjectUnderTopN;
 import org.apache.doris.nereids.rules.rewrite.PushCountIntoUnionAll;
-import org.apache.doris.nereids.rules.rewrite.PushDownAggThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownAggThroughJoinOnPkFk;
 import org.apache.doris.nereids.rules.rewrite.PushDownAggThroughJoinOneSide;
 import org.apache.doris.nereids.rules.rewrite.PushDownAggWithDistinctThroughJoinOneSide;
@@ -136,6 +139,7 @@ import org.apache.doris.nereids.rules.rewrite.PushDownJoinOnAssertNumRows;
 import org.apache.doris.nereids.rules.rewrite.PushDownLimit;
 import org.apache.doris.nereids.rules.rewrite.PushDownLimitDistinctThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownLimitDistinctThroughUnion;
+import org.apache.doris.nereids.rules.rewrite.PushDownMatchProjectionAsVirtualColumn;
 import org.apache.doris.nereids.rules.rewrite.PushDownProjectThroughLimit;
 import org.apache.doris.nereids.rules.rewrite.PushDownScoreTopNIntoOlapScan;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNDistinctThroughJoin;
@@ -143,6 +147,7 @@ import org.apache.doris.nereids.rules.rewrite.PushDownTopNDistinctThroughUnion;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNThroughUnion;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNThroughWindow;
+import org.apache.doris.nereids.rules.rewrite.PushDownUnnestInProject;
 import org.apache.doris.nereids.rules.rewrite.PushDownVectorTopNIntoOlapScan;
 import org.apache.doris.nereids.rules.rewrite.PushDownVirtualColumnsIntoOlapScan;
 import org.apache.doris.nereids.rules.rewrite.PushFilterInsideJoin;
@@ -153,6 +158,7 @@ import org.apache.doris.nereids.rules.rewrite.ReduceAggregateChildOutputRows;
 import org.apache.doris.nereids.rules.rewrite.ReorderJoin;
 import org.apache.doris.nereids.rules.rewrite.RewriteCteChildren;
 import org.apache.doris.nereids.rules.rewrite.RewriteSearchToSlots;
+import org.apache.doris.nereids.rules.rewrite.RewriteSimpleAggToConstantRule;
 import org.apache.doris.nereids.rules.rewrite.SaltJoin;
 import org.apache.doris.nereids.rules.rewrite.SetPreAggStatus;
 import org.apache.doris.nereids.rules.rewrite.SimplifyEncodeDecode;
@@ -168,6 +174,7 @@ import org.apache.doris.nereids.rules.rewrite.VariantSubPathPruning;
 import org.apache.doris.nereids.rules.rewrite.batch.ApplyToJoin;
 import org.apache.doris.nereids.rules.rewrite.batch.CorrelateApplyToUnCorrelateApply;
 import org.apache.doris.nereids.rules.rewrite.batch.EliminateUselessPlanUnderApply;
+import org.apache.doris.nereids.rules.rewrite.eageraggregation.PushDownAggregation;
 import org.apache.doris.nereids.trees.plans.algebra.SetOperation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalApply;
@@ -228,6 +235,8 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                             // so there may be two filters we need to merge them
                                             new MergeFilters()
                                     ),
+                                    custom(RuleType.AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION,
+                                            AggScalarSubQueryToWindowFunction::new),
                                     bottomUp(
                                             new EliminateUselessPlanUnderApply(),
                                             // CorrelateApplyToUnCorrelateApply and ApplyToJoin
@@ -278,6 +287,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
                             topDown(
                                     new NormalizeAggregate(),
                                     new CountLiteralRewrite(),
+                                    new RewriteSimpleAggToConstantRule(),
                                     new NormalizeSort()
                             ),
 
@@ -320,7 +330,8 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                             new PushFilterInsideJoin(),
                                             new FindHashConditionForJoin(),
                                             new ConvertInnerOrCrossJoin(),
-                                            new EliminateNullAwareLeftAntiJoin()
+                                            new EliminateNullAwareLeftAntiJoin(),
+                                            new JoinExtractOrFromCaseWhen()
                                     ),
                                     // push down SEMI Join
                                     bottomUp(
@@ -386,6 +397,11 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                             new CollectFilterAboveConsumer(),
                                             new CollectCteConsumerOutput())
                             ),
+                            topic("eliminate join according unique or foreign key",
+                                    cascadesContext -> cascadesContext.rewritePlanContainsTypes(LogicalJoin.class),
+                                    bottomUp(new EliminateJoinByFK()),
+                                    topDown(new EliminateJoinByUnique())
+                            ),
                             topic("Table/Physical optimization",
                                     topDown(
                                             new PruneOlapScanPartition(),
@@ -395,6 +411,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                     )
                             ),
                             topic("necessary rules before record mv",
+                                    topDown(new LimitSortToTopN()),
                                     topDown(new SplitLimit()),
                                     custom(RuleType.SET_PREAGG_STATUS, SetPreAggStatus::new),
                                     custom(RuleType.OPERATIVE_COLUMN_DERIVE, OperativeColumnDerive::new),
@@ -407,66 +424,69 @@ public class Rewriter extends AbstractBatchJobExecutor {
                     )
             );
 
+    private static final List<RewriteJob> NORMALIZE_PLAN_JOBS = jobs(
+            topic("Plan Normalization",
+                    custom(RuleType.FOLD_CONSTANT_FOR_SQL_CACHE, FoldConstantForSqlCache::new),
+                    // move MergeProjects rule from analyze phase
+                    // because SubqueryToApply and BindSink rule may create extra project node
+                    // we need merge them at the beginning of rewrite phase to let later rules happy
+                    topDown(new MergeProjectable()),
+                    topDown(
+                            new EliminateOrderByConstant(),
+                            new EliminateSortUnderSubqueryOrView(),
+                            // MergeProjects depends on this rule
+                            new LogicalSubQueryAliasToLogicalProject(),
+                            // TODO: we should do expression normalization after plan normalization
+                            //   because some rewritten depends on sub expression tree matching
+                            //   such as group by key matching and replaced
+                            //   but we need to do some normalization before subquery unnesting,
+                            //   such as extract common expression.
+                            ExpressionNormalizationAndOptimization.FULL_RULE_INSTANCE,
+                            new AvgDistinctToSumDivCount(),
+                            new CountDistinctRewrite(),
+                            new ExtractFilterFromCrossJoin()
+                    ),
+                    topDown(
+                            // ExtractSingleTableExpressionFromDisjunction conflict to InPredicateToEqualToRule
+                            // in the ExpressionNormalization, so must invoke in another job, otherwise dead loop.
+                            new ExtractSingleTableExpressionFromDisjunction()
+                    )
+            ),
+            // subquery unnesting relay on ExpressionNormalization to extract common factor expression
+            topic("Subquery unnesting",
+                    cascadesContext -> cascadesContext.rewritePlanContainsTypes(LogicalApply.class),
+                    // after doing NormalizeAggregate in analysis job
+                    // we need run the following 2 rules to make AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION work
+                    bottomUp(new PullUpProjectUnderApply()),
+                    topDown(
+                            new PushDownFilterThroughProject(),
+                            // the subquery may have where and having clause
+                            // so there may be two filters we need to merge them
+                            new MergeFilters()
+                    ),
+                    // query rewrite support window, so add this rule here
+                    custom(RuleType.AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION, AggScalarSubQueryToWindowFunction::new),
+                    bottomUp(
+                            new EliminateUselessPlanUnderApply(),
+                            // CorrelateApplyToUnCorrelateApply and ApplyToJoin
+                            // and SelectMaterializedIndexWithAggregate depends on this rule
+                            new MergeProjectable(),
+                            /*
+                             * Subquery unnesting.
+                             * 1. Adjust the plan in correlated logicalApply
+                             *    so that there are no correlated columns in the subquery.
+                             * 2. Convert logicalApply to a logicalJoin.
+                             *  TODO: group these rules to make sure the result plan is what we expected.
+                             */
+                            new CorrelateApplyToUnCorrelateApply(),
+                            new ApplyToJoin()
+                    )
+            )
+    );
+
     private static final List<RewriteJob> CTE_CHILDREN_REWRITE_JOBS_BEFORE_SUB_PATH_PUSH_DOWN = notTraverseChildrenOf(
             ImmutableSet.of(LogicalCTEAnchor.class),
             () -> jobs(
-                topic("Plan Normalization",
-                        custom(RuleType.FOLD_CONSTANT_FOR_SQL_CACHE, FoldConstantForSqlCache::new),
-                        // move MergeProjects rule from analyze phase
-                        // because SubqueryToApply and BindSink rule may create extra project node
-                        // we need merge them at the beginning of rewrite phase to let later rules happy
-                        topDown(new MergeProjectable()),
-                        topDown(
-                                new EliminateOrderByConstant(),
-                                new EliminateSortUnderSubqueryOrView(),
-                                // MergeProjects depends on this rule
-                                new LogicalSubQueryAliasToLogicalProject(),
-                                // TODO: we should do expression normalization after plan normalization
-                                //   because some rewritten depends on sub expression tree matching
-                                //   such as group by key matching and replaced
-                                //   but we need to do some normalization before subquery unnesting,
-                                //   such as extract common expression.
-                                ExpressionNormalizationAndOptimization.FULL_RULE_INSTANCE,
-                                new AvgDistinctToSumDivCount(),
-                                new CountDistinctRewrite(),
-                                new ExtractFilterFromCrossJoin()
-                        ),
-                        topDown(
-                                // ExtractSingleTableExpressionFromDisjunction conflict to InPredicateToEqualToRule
-                                // in the ExpressionNormalization, so must invoke in another job, otherwise dead loop.
-                                new ExtractSingleTableExpressionFromDisjunction()
-                        )
-                ),
-                // subquery unnesting relay on ExpressionNormalization to extract common factor expression
-                topic("Subquery unnesting",
-                        cascadesContext -> cascadesContext.rewritePlanContainsTypes(LogicalApply.class),
-                        // after doing NormalizeAggregate in analysis job
-                        // we need run the following 2 rules to make AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION work
-                        bottomUp(new PullUpProjectUnderApply()),
-                        topDown(
-                                new PushDownFilterThroughProject(),
-                                // the subquery may have where and having clause
-                                // so there may be two filters we need to merge them
-                                new MergeFilters()
-                        ),
-                        custom(RuleType.AGG_SCALAR_SUBQUERY_TO_WINDOW_FUNCTION, AggScalarSubQueryToWindowFunction::new),
-                        bottomUp(
-                                new EliminateUselessPlanUnderApply(),
-                                // CorrelateApplyToUnCorrelateApply and ApplyToJoin
-                                // and SelectMaterializedIndexWithAggregate depends on this rule
-                                new MergeProjectable(),
-                                /*
-                                 * Subquery unnesting.
-                                 * 1. Adjust the plan in correlated logicalApply
-                                 *    so that there are no correlated columns in the subquery.
-                                 * 2. Convert logicalApply to a logicalJoin.
-                                 *  TODO: group these rules to make sure the result plan is what we expected.
-                                 */
-                                new CorrelateApplyToUnCorrelateApply(),
-                                new ApplyToJoin()
-                        )
-                ),
-
                 // before `Subquery unnesting` topic, some correlate slots should have appeared at LogicalApply.left,
                 // but it appeared at LogicalApply.right. After the `Subquery unnesting` topic, all slots is placed in a
                 // normal position, then we can check column privileges by these steps
@@ -505,6 +525,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
                 topDown(
                         new NormalizeAggregate(),
                         new CountLiteralRewrite(),
+                        new RewriteSimpleAggToConstantRule(),
                         new NormalizeSort()
                 ),
 
@@ -522,6 +543,10 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                 new SimplifyWindowExpression()
                         )
                 ),
+                topic("Push down Unnest",
+                        topDown(
+                                new PushDownUnnestInProject()
+                        )),
                 topic("Rewrite join",
                         // infer not null filter, then push down filter, and then reorder join(cross join to inner join)
                         topDown(
@@ -543,7 +568,8 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                         new PushFilterInsideJoin(),
                                         new FindHashConditionForJoin(),
                                         new ConvertInnerOrCrossJoin(),
-                                        new EliminateNullAwareLeftAntiJoin()
+                                        new EliminateNullAwareLeftAntiJoin(),
+                                        new JoinExtractOrFromCaseWhen()
                                 ),
                                 // push down SEMI Join
                                 bottomUp(
@@ -635,19 +661,6 @@ public class Rewriter extends AbstractBatchJobExecutor {
                                 new MergeAggregate()
                         )
                 ),
-                topic("Eager aggregation",
-                        cascadesContext -> cascadesContext.rewritePlanContainsTypes(
-                                LogicalAggregate.class, LogicalJoin.class
-                        ),
-                        costBased(topDown(
-                                new PushDownAggWithDistinctThroughJoinOneSide(),
-                                new PushDownAggThroughJoinOneSide(),
-                                new PushDownAggThroughJoin()
-                        )),
-                        costBased(custom(RuleType.PUSH_DOWN_DISTINCT_THROUGH_JOIN, PushDownDistinctThroughJoin::new)),
-                        topDown(new PushCountIntoUnionAll())
-                ),
-
                 // this rule should invoke after infer predicate and push down distinct, and before push down limit
                 topic("eliminate join according unique or foreign key",
                     cascadesContext -> cascadesContext.rewritePlanContainsTypes(LogicalJoin.class),
@@ -664,7 +677,19 @@ public class Rewriter extends AbstractBatchJobExecutor {
                         topDown(new PushDownAggThroughJoinOnPkFk()),
                         topDown(new PullUpJoinFromUnionAll())
                 ),
+                topic("Eager aggregation",
+                        cascadesContext -> cascadesContext.rewritePlanContainsTypes(
+                                LogicalAggregate.class, LogicalJoin.class
+                        ),
+                        costBased(topDown(
+                                new PushDownAggWithDistinctThroughJoinOneSide(),
+                                new PushDownAggThroughJoinOneSide()
+                        )),
 
+                        costBased(custom(RuleType.PUSH_DOWN_DISTINCT_THROUGH_JOIN, PushDownDistinctThroughJoin::new)),
+                        custom(RuleType.PUSH_DOWN_AGG_THROUGH_JOIN, PushDownAggregation::new),
+                        topDown(new PushCountIntoUnionAll())
+                ),
                 topic("Limit optimization",
                         cascadesContext -> cascadesContext.rewritePlanContainsTypes(LogicalLimit.class)
                                 || cascadesContext.rewritePlanContainsTypes(LogicalTopN.class)
@@ -769,6 +794,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
                 custom(RuleType.ELIMINATE_UNNECESSARY_PROJECT, EliminateUnnecessaryProject::new),
                 topDown(new PushDownVectorTopNIntoOlapScan()),
                 topDown(new PushDownVirtualColumnsIntoOlapScan()),
+                topDown(new PushDownMatchProjectionAsVirtualColumn()),
                 topic("score optimize",
                         topDown(new PushDownScoreTopNIntoOlapScan(),
                                 new CheckScoreUsage())
@@ -790,6 +816,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
                         custom(RuleType.CHECK_DATA_TYPES, CheckDataTypes::new),
                         topDown(new PushDownFilterThroughProject(), new MergeProjectable()),
                         custom(RuleType.ADJUST_CONJUNCTS_RETURN_TYPE, AdjustConjunctsReturnType::new),
+                        topDown(new ExpressionRewrite(MergeGuardExpr.INSTANCE)),
                         bottomUp(
                                 new ExpressionRewrite(CheckLegalityAfterRewrite.INSTANCE),
                                 new CheckMatchExpression(),
@@ -841,14 +868,14 @@ public class Rewriter extends AbstractBatchJobExecutor {
     public static Rewriter getWholeTreeRewriterWithCustomJobs(
             CascadesContext cascadesContext, List<RewriteJob> jobs) {
         List<RewriteJob> wholeTreeRewriteJobs = getWholeTreeRewriteJobs(
-                false, false, jobs, ImmutableList.of(), true);
+                false, false, jobs, ImmutableList.of(), true, false);
         return new Rewriter(cascadesContext, wholeTreeRewriteJobs, true);
     }
 
     private static List<RewriteJob> getWholeTreeRewriteJobs(boolean runCboRules) {
         return getWholeTreeRewriteJobs(true, true,
                 CTE_CHILDREN_REWRITE_JOBS_BEFORE_SUB_PATH_PUSH_DOWN,
-                CTE_CHILDREN_REWRITE_JOBS_AFTER_SUB_PATH_PUSH_DOWN, runCboRules);
+                CTE_CHILDREN_REWRITE_JOBS_AFTER_SUB_PATH_PUSH_DOWN, runCboRules, true);
     }
 
     private static List<RewriteJob> getWholeTreeRewriteJobs(
@@ -856,71 +883,85 @@ public class Rewriter extends AbstractBatchJobExecutor {
             boolean needOrExpansion,
             List<RewriteJob> beforePushDownJobs,
             List<RewriteJob> afterPushDownJobs,
-            boolean runCboRules) {
+            boolean runCboRules,
+            boolean includeNormalizePlanJobs) {
+        ImmutableList.Builder<RewriteJob> builder = ImmutableList.builder();
+        if (includeNormalizePlanJobs) {
+            builder.addAll(NORMALIZE_PLAN_JOBS);
+        }
+        builder.addAll(notTraverseChildrenOf(
+                ImmutableSet.of(LogicalCTEAnchor.class),
+                () -> {
+                    List<RewriteJob> rewriteJobs = Lists.newArrayListWithExpectedSize(300);
 
-        return notTraverseChildrenOf(
-            ImmutableSet.of(LogicalCTEAnchor.class),
-            () -> {
-                List<RewriteJob> rewriteJobs = Lists.newArrayListWithExpectedSize(300);
-
-                rewriteJobs.addAll(jobs(
-                        topic("cte inline and pull up all cte anchor",
-                                custom(RuleType.PULL_UP_CTE_ANCHOR, PullUpCteAnchor::new),
-                                custom(RuleType.CTE_INLINE, CTEInline::new)
-                        ),
-                        topic("process limit session variables",
-                                custom(RuleType.ADD_DEFAULT_LIMIT, AddDefaultLimit::new)
-                        ),
-                        topic("record query tmp plan for mv pre rewrite",
-                                custom(RuleType.RECORD_PLAN_FOR_MV_PRE_REWRITE, RecordPlanForMvPreRewrite::new)
-                        ),
-                        topic("rewrite cte sub-tree before sub path push down",
-                                custom(RuleType.REWRITE_CTE_CHILDREN,
-                                        () -> new RewriteCteChildren(beforePushDownJobs, runCboRules)
-                                )
-                        )));
-                rewriteJobs.addAll(jobs(topic("convert outer join to anti",
-                        custom(RuleType.CONVERT_OUTER_JOIN_TO_ANTI, ConvertOuterJoinToAntiJoin::new))));
-                rewriteJobs.addAll(jobs(topic("eliminate group by key by uniform",
-                        custom(RuleType.ELIMINATE_GROUP_BY_KEY_BY_UNIFORM, EliminateGroupByKeyByUniform::new))));
-                if (needOrExpansion) {
-                    rewriteJobs.addAll(jobs(topic("or expansion",
-                            custom(RuleType.OR_EXPANSION, () -> OrExpansion.INSTANCE))));
-                }
-
-                rewriteJobs.addAll(jobs(topic("split multi distinct",
-                        custom(RuleType.DISTINCT_AGG_STRATEGY_SELECTOR, () -> DistinctAggStrategySelector.INSTANCE))));
-
-                // Rewrite search function before VariantSubPathPruning
-                // so that ElementAt expressions from search can be processed
-                rewriteJobs.addAll(jobs(
-                        bottomUp(new RewriteSearchToSlots())
-                ));
-
-                if (needSubPathPushDown) {
                     rewriteJobs.addAll(jobs(
-                            topic("variant element_at push down",
-                                    custom(RuleType.VARIANT_SUB_PATH_PRUNING, VariantSubPathPruning::new)
-                            )
+                            topic("cte inline and pull up all cte anchor",
+                                    custom(RuleType.PULL_UP_CTE_ANCHOR, PullUpCteAnchor::new),
+                                    custom(RuleType.CTE_INLINE, CTEInline::new)
+                            ),
+                            topic("process limit session variables",
+                                    custom(RuleType.ADD_DEFAULT_LIMIT, AddDefaultLimit::new)
+                            ),
+                            topic("record query tmp plan for mv pre rewrite",
+                                    custom(RuleType.RECORD_PLAN_FOR_MV_PRE_REWRITE, RecordPlanForMvPreRewrite::new)
+                            ),
+                            topic("rewrite cte sub-tree before sub path push down",
+                                    custom(RuleType.REWRITE_CTE_CHILDREN,
+                                            () -> new RewriteCteChildren(beforePushDownJobs, runCboRules)
+                                    )
+                            )));
+                    rewriteJobs.addAll(jobs(topic("convert outer join to anti",
+                            custom(RuleType.CONVERT_OUTER_JOIN_TO_ANTI, ConvertOuterJoinToAntiJoin::new))));
+                    rewriteJobs.addAll(jobs(topic("eliminate group by key by uniform",
+                            custom(RuleType.ELIMINATE_GROUP_BY_KEY_BY_UNIFORM, EliminateGroupByKeyByUniform::new))));
+                    if (needOrExpansion) {
+                        rewriteJobs.addAll(jobs(topic("or expansion",
+                                custom(RuleType.OR_EXPANSION, () -> OrExpansion.INSTANCE))));
+                    }
+                    rewriteJobs.add(topic("repeat rewrite",
+                            custom(RuleType.DECOMPOSE_REPEAT, () -> DecomposeRepeatWithPreAggregation.INSTANCE)));
+
+                    rewriteJobs.addAll(jobs(topic("split multi distinct",
+                            custom(RuleType.DISTINCT_AGG_STRATEGY_SELECTOR,
+                                    () -> DistinctAggStrategySelector.INSTANCE))));
+
+                    // Rewrite search function before VariantSubPathPruning
+                    // so that ElementAt expressions from search can be processed
+                    rewriteJobs.addAll(jobs(
+                            bottomUp(new RewriteSearchToSlots())
                     ));
-                }
-                rewriteJobs.addAll(jobs(
-                        topic("rewrite cte sub-tree after sub path push down",
-                                custom(RuleType.CLEAR_CONTEXT_STATUS, ClearContextStatus::new),
-                                custom(RuleType.REWRITE_CTE_CHILDREN,
-                                        () -> new RewriteCteChildren(afterPushDownJobs, runCboRules)
+
+                    if (needSubPathPushDown) {
+                        rewriteJobs.addAll(jobs(
+                                topic("variant element_at push down",
+                                        custom(RuleType.VARIANT_SUB_PATH_PRUNING, VariantSubPathPruning::new)
                                 )
-                        ),
-                        topic("whole plan check",
-                                custom(RuleType.ADJUST_NULLABLE, () -> new AdjustNullable(false))
-                        ),
-                        // NullableDependentExpressionRewrite need to be done after nullable fixed
-                        topic("condition function", bottomUp(ImmutableList.of(
-                                new NullableDependentExpressionRewrite())))
-                ));
-                return rewriteJobs;
-            }
-        );
+                        ));
+                    }
+                    rewriteJobs.add(
+                            topic("nested column prune",
+                                    custom(RuleType.NESTED_COLUMN_PRUNING, NestedColumnPruning::new)
+                            )
+                    );
+                    rewriteJobs.addAll(jobs(
+                                    topic("rewrite cte sub-tree after sub path push down",
+                                            custom(RuleType.CLEAR_CONTEXT_STATUS, ClearContextStatus::new),
+                                            custom(RuleType.REWRITE_CTE_CHILDREN,
+                                                    () -> new RewriteCteChildren(afterPushDownJobs, runCboRules)
+                                            )
+                                    ),
+                                    topic("whole plan check",
+                                            custom(RuleType.ADJUST_NULLABLE, () -> new AdjustNullable(false))
+                                    ),
+                                    // NullableDependentExpressionRewrite need to be done after nullable fixed
+                                    topic("condition function", bottomUp(ImmutableList.of(
+                                            new NullableDependentExpressionRewrite())))
+                            )
+                    );
+                    return rewriteJobs;
+                }
+        ));
+        return builder.build();
     }
 
     @Override

@@ -27,6 +27,49 @@ enum TPatternType {
   MATCH_NAME_GLOB = 2
 }
 
+enum TAccessPathType {
+  DATA = 1,
+  META = 2 // use to prune `where s.data is not null` by only scan the meta of s.data
+}
+
+struct TDataAccessPath {
+   // the specification of special path:
+   //   <empty>: access the whole complex column
+   //   *:
+   //     1. access every items when the type is array
+   //     2. access key and value when the type is map
+   //   KEYS: only access the keys of map
+   //   VALUES: only access the keys of map
+   //
+   // example:
+   //  s: struct<
+   //    data: array<
+   //      map<
+   //        int,
+   //        struct<
+   //          a: id
+   //          b: double
+   //        >
+   //      >
+   //    >
+   //  >
+   // if we want to access `map_keys(s.data[0])`, the path will be: ['s', 'data', '*', 'KEYS'],
+   // if we want to access `map_values(s.data[0])[0].b`, the path will be: ['s', 'data', '*', 'VALUES', 'b'],
+   // if we want to access `s.data[0]['k'].b`, the path will be ['s', 'data', '*', '*', 'b']
+   // if we want to access the whole struct of s, the path will be: ['s'],
+   1: required list<string> path
+}
+
+struct TMetaAccessPath {
+  1: required list<string> path
+}
+
+struct TColumnAccessPath {
+  1: required TAccessPathType type
+  2: optional TDataAccessPath data_access_path
+  3: optional TMetaAccessPath meta_access_path
+}
+
 struct TColumn {
     1: required string column_name
     2: required Types.TColumnType column_type
@@ -39,7 +82,7 @@ struct TColumn {
     9: optional bool visible = true
     10: optional list<TColumn> children_column
     11: optional i32 col_unique_id  = -1
-    12: optional bool has_bitmap_index = false
+    12: optional bool has_bitmap_index = false // deprecated
     13: optional bool has_ngram_bf_index = false
     14: optional i32 gram_size
     15: optional i32 gram_bf_size
@@ -53,6 +96,10 @@ struct TColumn {
     23: optional bool is_on_update_current_timestamp = false
     24: optional i32 variant_max_sparse_column_statistics_size = 10000
     25: optional i32 variant_sparse_hash_shard_count
+    26: optional bool variant_enable_doc_mode
+  27: optional i64 variant_doc_materialization_min_rows
+  28: optional i32 variant_doc_hash_shard_count
+  29: optional bool variant_enable_nested_group
 }
 
 struct TSlotDescriptor {
@@ -65,18 +112,21 @@ struct TSlotDescriptor {
   7: required i32 nullIndicatorBit
   8: required string colName;
   9: required i32 slotIdx
-  10: required bool isMaterialized
+  10: required bool isMaterialized // deprecated
   11: optional i32 col_unique_id = -1
   12: optional bool is_key = false
   // If set to false, then such slots will be ignored during
-  // materialize them.Used to optmize to read less data and less memory usage
-  13: optional bool need_materialize = true
+  // materialize them.Used to optimize to read less data and less memory usage
+  13: optional bool need_materialize = true // deprecated
   14: optional bool is_auto_increment = false;
   // subcolumn path info list for semi structure column(variant)
+  // deprecated: will be replaced to column_access_paths
   15: optional list<string> column_paths
   16: optional string col_default_value
   17: optional Types.TPrimitiveType primitive_type = Types.TPrimitiveType.INVALID_TYPE
   18: optional Exprs.TExpr virtual_column_expr
+  19: optional list<TColumnAccessPath> all_access_paths
+  20: optional list<TColumnAccessPath> predicate_access_paths
 }
 
 struct TTupleDescriptor {
@@ -163,6 +213,8 @@ enum TSchemaTableType {
     SCH_COLUMN_DATA_SIZES = 63;
     SCH_LOAD_JOBS = 64;
     SCH_FILE_CACHE_INFO = 65;
+    SCH_DATABASE_PROPERTIES = 66;
+    SCH_AUTHENTICATION_INTEGRATIONS = 67;
 }
 
 enum THdfsCompression {
@@ -226,6 +278,9 @@ struct TOlapTablePartition {
     11: optional i64 load_tablet_idx
     12: optional i32 total_replica_num
     13: optional i32 load_required_replica_num
+    // tablet_id -> list of backend_ids that have version gaps (lastFailedVersion >= 0)
+    // used by BE to exclude these backends from success counting in majority write
+    14: optional map<i64, list<i64>> tablet_version_gap_backends
 }
 
 struct TOlapTablePartitionParam {
@@ -251,6 +306,8 @@ struct TOlapTablePartitionParam {
     11: optional bool enable_auto_detect_overwrite
     12: optional i64 overwrite_group_id
     13: optional bool partitions_is_fake = false
+    // remote insert fe master address
+    14: optional Types.TNetworkAddress master_address
 }
 
 struct TOlapTableIndex {
@@ -392,13 +449,14 @@ struct TMCTable {
   1: optional string region // deprecated
   2: optional string project
   3: optional string table
-  4: optional string access_key
-  5: optional string secret_key
+  4: optional string access_key // deprecated
+  5: optional string secret_key // deprecated
   6: optional string public_access // deprecated
   7: optional string odps_url   // deprecated
   8: optional string tunnel_url // deprecated 
   9: optional string endpoint
   10: optional string quota
+  11: optional map<string, string> properties // contains authentication properties
 }
 
 struct TTrinoConnectorTable {

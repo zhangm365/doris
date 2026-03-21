@@ -101,7 +101,8 @@ enum TPrimitiveType {
   UINT32 = 40, // only used in BE to represent offsets
   UINT64 = 41,  // only used in BE to represent offsets
   FIXED_LENGTH_OBJECT = 42 // only used in BE to represent fixed-length object
-  VARBINARY = 43 // represent varbinary type
+  VARBINARY = 43, // represent varbinary type
+  TIMESTAMPTZ = 44 //  timestamp with time zone
 }
 
 enum TTypeNodeType {
@@ -248,7 +249,8 @@ enum TTaskType {
     PUSH_INDEX_POLICY = 35,
 
     // CLOUD
-    CALCULATE_DELETE_BITMAP = 1000
+    CALCULATE_DELETE_BITMAP = 1000,
+    MAKE_CLOUD_COMMITTED_RS_VISIBLE = 1001
 }
 
 // level of verboseness for "explain" output
@@ -331,7 +333,9 @@ enum TFunctionBinaryType {
 
   JAVA_UDF = 5,
 
-  AGG_STATE = 6
+  AGG_STATE = 6,
+
+  PYTHON_UDF = 7
 }
 
 // Represents a fully qualified function name.
@@ -407,6 +411,8 @@ struct TFunction {
   15: optional bool is_static_load = false
   16: optional i64 expiration_time //minutes
   17: optional TDictFunction dict_function
+  18: optional string runtime_version
+  19: optional string function_code
 }
 
 enum TJdbcOperation {
@@ -693,6 +699,7 @@ enum TFileType {
     FILE_S3 = 3,
     FILE_HDFS = 4,
     FILE_NET = 5,       // read file by network, such as http
+    FILE_HTTP = 6,
 }
 
 struct TTabletCommitInfo {
@@ -751,6 +758,7 @@ enum TMetadataType {
   PARTITION_VALUES = 10,
   HUDI = 11,
   PAIMON = 12,
+  PARQUET = 13,
 }
 
 // deprecated
@@ -769,8 +777,12 @@ struct TUserIdentity {
     3: optional bool is_domain
 }
 
+struct TColumnGroup {
+    1: required i32 sequence_column = -1
+    2: required list<i32> columns_in_group
+}
+
 const i32 TSNAPSHOT_REQ_VERSION1 = 3; // corresponding to alpha rowset
 const i32 TSNAPSHOT_REQ_VERSION2 = 4; // corresponding to beta rowset
 // the snapshot request should always set prefer snapshot version to TPREFER_SNAPSHOT_REQ_VERSION
 const i32 TPREFER_SNAPSHOT_REQ_VERSION = TSNAPSHOT_REQ_VERSION2;
-

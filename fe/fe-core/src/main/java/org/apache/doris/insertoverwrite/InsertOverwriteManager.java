@@ -22,6 +22,7 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MTMV;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
@@ -46,28 +47,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public class InsertOverwriteManager extends MasterDaemon implements Writable {
+public class InsertOverwriteManager extends MasterDaemon implements Writable, AbstractInsertOverwriteManager {
     private static final Logger LOG = LogManager.getLogger(InsertOverwriteManager.class);
 
-    private static final long CLEAN_INTERVAL_SECOND = 10;
-
     @SerializedName(value = "tasks")
-    private Map<Long, InsertOverwriteTask> tasks = Maps.newConcurrentMap();
+    private ConcurrentMap<Long, InsertOverwriteTask> tasks = Maps.newConcurrentMap();
 
     // <txnId, <dbId, tableId>>
     // for iot auto detect tasks. a txn will make many task by different rpc
     @SerializedName(value = "taskGroups")
-    private Map<Long, List<Long>> taskGroups = Maps.newConcurrentMap();
+    private ConcurrentMap<Long, List<Long>> taskGroups = Maps.newConcurrentMap();
     // for one task group, there may be different requests about changing a partition to new.
     // but we only change one time and save the relations in partitionPairs. they're protected by taskLocks
     @SerializedName(value = "taskLocks")
-    private Map<Long, ReentrantLock> taskLocks = Maps.newConcurrentMap();
+    private ConcurrentMap<Long, ReentrantLock> taskLocks = Maps.newConcurrentMap();
     // <groupId, <oldPartId, newPartId>>. no need concern which task it belongs to.
     @SerializedName(value = "partitionPairs")
-    private Map<Long, Map<Long, Long>> partitionPairs = Maps.newConcurrentMap();
+    private ConcurrentMap<Long, Map<Long, Long>> partitionPairs = Maps.newConcurrentMap();
 
     // TableId running insert overwrite
     // dbId ==> Set<tableId>
@@ -75,7 +75,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
     private ReentrantReadWriteLock runningLock = new ReentrantReadWriteLock(true);
 
     public InsertOverwriteManager() {
-        super("InsertOverwriteDropDirtyPartitions", CLEAN_INTERVAL_SECOND * 1000);
+        super("InsertOverwriteDropDirtyPartitions", Config.overwrite_clean_interval_ms);
     }
 
     /**
@@ -96,6 +96,11 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
         return taskId;
     }
 
+    @Override
+    public long registerTask(TableIf targetTable, List<String> tempPartitionNames) throws Exception {
+        return registerTask(targetTable.getDatabase().getId(), targetTable.getId(), tempPartitionNames);
+    }
+
     /**
      * register insert overwrite task group for auto detect partition.
      * it may have many tasks by FrontendService rpc deal.
@@ -113,9 +118,15 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
         return groupId;
     }
 
+    @Override
+    public long registerTaskGroup(TableIf table) {
+        return registerTaskGroup(table.getId());
+    }
+
     /**
      * for iot auto detect. register task first. then put in group.
      */
+    @Override
     public void registerTaskInGroup(long groupId, long taskId) {
         LOG.info("register task " + taskId + " in group " + groupId);
         taskGroups.get(groupId).add(taskId);
@@ -161,6 +172,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
 
     // When goes into failure, some BE may still not know and send new request.
     // it will cause ConcurrentModification or NullPointer.
+    @Override
     public void taskGroupFail(long groupId) {
         LOG.info("insert overwrite auto detect partition task group [" + groupId + "] failed");
         ReentrantLock lock = getLock(groupId);
@@ -177,6 +189,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
     }
 
     // here we will make all raplacement of this group visiable. if someone fails, nothing happen.
+    @Override
     public void taskGroupSuccess(long groupId, OlapTable targetTable) throws DdlException {
         try {
             Map<Long, Long> relations = partitionPairs.get(groupId);
@@ -212,6 +225,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
      *
      * @param taskId
      */
+    @Override
     public void taskFail(long taskId) {
         LOG.info("insert overwrite task [" + taskId + "] failed");
         boolean rollback = rollback(taskId);
@@ -230,6 +244,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
      *
      * @param taskId
      */
+    @Override
     public void taskSuccess(long taskId) {
         LOG.info("insert overwrite task [" + taskId + "] succeed");
         removeTask(taskId);
@@ -291,6 +306,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
      * @param db Run the db for insert overwrite
      * @param table Run the table for insert overwrite
      */
+    @Override
     public void recordRunningTableOrException(DatabaseIf db, TableIf table) {
         // The logic of OlapTable executing insert overwrite is to create temporary partitions,
         // replace partitions, etc.
@@ -339,6 +355,11 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
         }
     }
 
+    @Override
+    public void dropRunningRecord(DatabaseIf db, TableIf targetTable) throws Exception {
+        dropRunningRecord(db.getId(), targetTable.getId());
+    }
+
     /**
      * replay logs
      *
@@ -368,6 +389,7 @@ public class InsertOverwriteManager extends MasterDaemon implements Writable {
      */
     @Override
     protected void runAfterCatalogReady() {
+        setInterval(Config.overwrite_clean_interval_ms); // aware of dynamic change
         LOG.info("start clean insert overwrite temp partitions");
         HashMap<Long, InsertOverwriteTask> copyTasks = Maps.newHashMap(tasks);
         for (Entry<Long, InsertOverwriteTask> entry : copyTasks.entrySet()) {

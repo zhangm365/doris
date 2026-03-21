@@ -17,15 +17,14 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.analysis.IndexDef;
-import org.apache.doris.analysis.IndexDef.IndexType;
-import org.apache.doris.analysis.InvertedIndexUtil;
+import org.apache.doris.analysis.InvertedIndexProperties;
+import org.apache.doris.catalog.info.IndexType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
-import org.apache.doris.common.util.PrintableMap;
 import org.apache.doris.common.util.SqlUtils;
+import org.apache.doris.foundation.util.BasicPrintableMap;
 import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.proto.OlapFile;
 import org.apache.doris.thrift.TIndexType;
@@ -62,34 +61,35 @@ public class Index implements Writable {
     @SerializedName(value = "c", alternate = {"columns"})
     private List<String> columns;
     @SerializedName(value = "it", alternate = {"indexType"})
-    private IndexDef.IndexType indexType;
+    private IndexType indexType;
     @SerializedName(value = "pt", alternate = {"properties"})
     private Map<String, String> properties;
     @SerializedName(value = "ct", alternate = {"comment"})
     private String comment;
 
     public Index(long indexId, String indexName, List<String> columns,
-            IndexDef.IndexType indexType, Map<String, String> properties, String comment) {
+            IndexType indexType, Map<String, String> properties, String comment) {
         this.indexId = indexId;
         this.indexName = indexName;
         this.columns = columns == null ? Lists.newArrayList() : Lists.newArrayList(columns);
         this.indexType = indexType;
         this.properties = properties == null ? Maps.newHashMap() : Maps.newHashMap(properties);
         this.comment = comment;
-        if (indexType == IndexDef.IndexType.INVERTED) {
+        if (indexType == IndexType.INVERTED) {
             if (this.properties != null && !this.properties.isEmpty()) {
-                if (this.properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY)
-                        || this.properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY_ALIAS)
-                        || this.properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_CUSTOM_ANALYZER_KEY)) {
-                    String supportPhraseKey = InvertedIndexUtil
+                if (this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY)
+                        || this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY_ALIAS)
+                        || this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_ANALYZER_NAME_KEY)
+                        || this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_NORMALIZER_NAME_KEY)) {
+                    String supportPhraseKey = InvertedIndexProperties
                             .INVERTED_INDEX_SUPPORT_PHRASE_KEY;
                     if (!this.properties.containsKey(supportPhraseKey)) {
                         this.properties.put(supportPhraseKey, "true");
                     }
                 }
-                if (this.properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY)
-                        || this.properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY_ALIAS)) {
-                    String lowerCaseKey = InvertedIndexUtil.INVERTED_INDEX_PARSER_LOWERCASE_KEY;
+                if (this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY)
+                        || this.properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY_ALIAS)) {
+                    String lowerCaseKey = InvertedIndexProperties.INVERTED_INDEX_PARSER_LOWERCASE_KEY;
                     if (!this.properties.containsKey(lowerCaseKey)) {
                         this.properties.put(lowerCaseKey, "true");
                     }
@@ -130,11 +130,11 @@ public class Index implements Writable {
         this.columns = columns;
     }
 
-    public IndexDef.IndexType getIndexType() {
+    public IndexType getIndexType() {
         return indexType;
     }
 
-    public void setIndexType(IndexDef.IndexType indexType) {
+    public void setIndexType(IndexType indexType) {
         this.indexType = indexType;
     }
 
@@ -152,65 +152,44 @@ public class Index implements Writable {
         }
 
         // Use TreeMap to ensure consistent ordering of properties
-        return "(" + new PrintableMap(new java.util.TreeMap<>(properties), "=", true, false, ",").toString() + ")";
+        return "(" + new BasicPrintableMap<>(new java.util.TreeMap<>(properties), "=", true, false, ",").toString()
+                + ")";
     }
 
     public String getInvertedIndexParser() {
-        return InvertedIndexUtil.getInvertedIndexParser(properties);
+        return InvertedIndexProperties.getInvertedIndexParser(properties);
     }
 
     public boolean isInvertedIndexParserNone() {
-        return InvertedIndexUtil.INVERTED_INDEX_PARSER_NONE.equals(getInvertedIndexParser());
-    }
-
-    public String getInvertedIndexParserMode() {
-        return InvertedIndexUtil.getInvertedIndexParserMode(properties);
-    }
-
-    public Map<String, String> getInvertedIndexCharFilter() {
-        return InvertedIndexUtil.getInvertedIndexCharFilter(properties);
-    }
-
-    public boolean getInvertedIndexParserLowercase() {
-        return InvertedIndexUtil.getInvertedIndexParserLowercase(properties);
-    }
-
-    public String getInvertedIndexParserStopwords() {
-        return InvertedIndexUtil.getInvertedIndexParserStopwords(properties);
+        return InvertedIndexProperties.INVERTED_INDEX_PARSER_NONE.equals(getInvertedIndexParser());
     }
 
     public String getInvertedIndexFieldPattern() {
-        return InvertedIndexUtil.getInvertedIndexFieldPattern(properties);
-    }
-
-    public boolean getInvertedIndexSupportPhrase() {
-        return InvertedIndexUtil.getInvertedIndexSupportPhrase(properties);
+        return InvertedIndexProperties.getInvertedIndexFieldPattern(properties);
     }
 
     // Whether the index can be changed in light mode
     public boolean isLightIndexChangeSupported() {
-        return indexType == IndexDef.IndexType.INVERTED || indexType == IndexType.NGRAM_BF;
+        return indexType == IndexType.INVERTED
+                || indexType == IndexType.NGRAM_BF
+                || indexType == IndexType.ANN;
     }
 
     // Whether the index can be added in light mode
     // cloud mode supports light add for ngram_bf index and non-tokenized inverted index (parser="none")
-    // local mode supports light add for both inverted index and ngram_bf index
+    // local mode supports light add for inverted index, ann index and ngram_bf index
     // the rest of the index types do not support light add
     public boolean isLightAddIndexSupported(boolean enableAddIndexForNewData) {
         if (Config.isCloudMode()) {
-            if (indexType == IndexDef.IndexType.INVERTED) {
+            if (indexType == IndexType.INVERTED) {
                 return isInvertedIndexParserNone() && enableAddIndexForNewData;
-            } else if (indexType == IndexDef.IndexType.NGRAM_BF) {
+            } else if (indexType == IndexType.NGRAM_BF) {
                 return enableAddIndexForNewData;
             }
             return false;
         }
-        return (indexType == IndexDef.IndexType.NGRAM_BF && enableAddIndexForNewData)
-                || (indexType == IndexDef.IndexType.INVERTED);
-    }
-
-    public String getInvertedIndexCustomAnalyzer() {
-        return InvertedIndexUtil.getInvertedIndexCustomAnalyzer(properties);
+        return (indexType == IndexType.NGRAM_BF && enableAddIndexForNewData)
+                || (indexType == IndexType.INVERTED) || (indexType == IndexType.ANN);
     }
 
     public String getComment() {
@@ -359,8 +338,8 @@ public class Index implements Writable {
         bloomFilters = bloomFilters == null ? Collections.emptySet() : bloomFilters;
         Set<String> bfColumns = new HashSet<>();
         for (Index index : indices) {
-            if (IndexDef.IndexType.NGRAM_BF == index.getIndexType()
-                    || IndexDef.IndexType.BLOOMFILTER == index.getIndexType()) {
+            if (IndexType.NGRAM_BF == index.getIndexType()
+                    || IndexType.BLOOMFILTER == index.getIndexType()) {
                 for (String column : index.getColumns()) {
                     column = column.toLowerCase();
                     if (bfColumns.contains(column)) {
@@ -381,11 +360,16 @@ public class Index implements Writable {
         }
     }
 
+    /**
+     * Returns whether this index is an analyzed inverted index,
+     * i.e. an inverted index with parser/analyzer/normalizer properties.
+     */
     public boolean isAnalyzedInvertedIndex() {
-        return indexType == IndexDef.IndexType.INVERTED
-            && properties != null
-            && (properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY)
-                || properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_PARSER_KEY_ALIAS)
-                || properties.containsKey(InvertedIndexUtil.INVERTED_INDEX_CUSTOM_ANALYZER_KEY));
+        return indexType == IndexType.INVERTED
+                && properties != null
+                && (properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY)
+                || properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_PARSER_KEY_ALIAS)
+                || properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_ANALYZER_NAME_KEY)
+                || properties.containsKey(InvertedIndexProperties.INVERTED_INDEX_NORMALIZER_NAME_KEY));
     }
 }

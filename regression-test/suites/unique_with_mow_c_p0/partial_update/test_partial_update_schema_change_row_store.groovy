@@ -41,7 +41,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c4`, `c1`) 
+                ORDER BY(`c4`, `c1`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -168,7 +168,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c1`, `c5`) 
+                ORDER BY(`c1`, `c5`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -293,7 +293,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c4`, `c0`) 
+                ORDER BY(`c4`, `c0`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -477,7 +477,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c5`, `c4`, `c6`) 
+                ORDER BY(`c5`, `c4`, `c6`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -513,7 +513,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
 
     qt_sql10 " select * from ${tableName} order by c0 "
     
-    sql " CREATE INDEX test ON ${tableName} (c1) USING BITMAP "
+    sql " CREATE INDEX test ON ${tableName} (c1) USING INVERTED "
     // if timeout awaitility will raise exception
     Awaitility.await().atMost(try_times, TimeUnit.SECONDS).with().pollDelay(100, TimeUnit.MILLISECONDS).await().until(() -> {
         def res = sql " SHOW ALTER TABLE COLUMN WHERE TableName = '${tableName}' ORDER BY CreateTime DESC LIMIT 1 "
@@ -570,7 +570,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c4`, `c9`, `c8`) 
+                ORDER BY(`c4`, `c9`, `c8`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -657,7 +657,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c5`, `c0`, `c2`) 
+                ORDER BY(`c5`, `c0`, `c2`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -781,7 +781,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c5`, `c9`) 
+                ORDER BY(`c5`, `c9`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -900,7 +900,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c8`, `c1`) 
+                ORDER BY(`c8`, `c1`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -1079,7 +1079,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c7`, `c6`, `c0`) 
+                ORDER BY(`c7`, `c6`, `c0`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",
@@ -1113,7 +1113,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
 
     qt_sql23 " select * from ${tableName} order by c0 "
     
-    sql " CREATE INDEX test ON ${tableName} (c1) USING BITMAP "
+    sql " CREATE INDEX test ON ${tableName} (c1) USING INVERTED "
     // if timeout awaitility will raise exception
     Awaitility.await().atMost(try_times, TimeUnit.SECONDS).with().pollDelay(100, TimeUnit.MILLISECONDS).await().until(() -> {
         def res = sql " SHOW ALTER TABLE COLUMN WHERE TableName = '${tableName}' ORDER BY CreateTime DESC LIMIT 1 "
@@ -1170,7 +1170,7 @@ suite("test_partial_update_row_store_schema_change", "p0") {
                 `c8` int NULL,
                 `c9` int NULL)
                 UNIQUE KEY(`c0`)
-                CLUSTER BY(`c2`, `c0`, `c7`, `c1`) 
+                ORDER BY(`c2`, `c0`, `c7`, `c1`) 
                 DISTRIBUTED BY HASH(`c0`) BUCKETS 1
                 PROPERTIES(
                     "replication_num" = "1",

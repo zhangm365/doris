@@ -20,13 +20,11 @@ package org.apache.doris.nereids.trees.plans.commands.info;
 import org.apache.doris.analysis.BrokerDesc;
 import org.apache.doris.analysis.CastExpr;
 import org.apache.doris.analysis.CopyFromParam;
-import org.apache.doris.analysis.CopyIntoProperties;
 import org.apache.doris.analysis.DataDescription;
 import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.Separator;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StageAndPattern;
-import org.apache.doris.analysis.StageProperties;
 import org.apache.doris.analysis.StorageBackend;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.catalog.Column;
@@ -38,7 +36,6 @@ import org.apache.doris.cloud.proto.Cloud.StagePB;
 import org.apache.doris.cloud.proto.Cloud.StagePB.StageType;
 import org.apache.doris.cloud.stage.StageUtil;
 import org.apache.doris.cloud.storage.RemoteBase;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.util.DebugUtil;
@@ -190,7 +187,7 @@ public class CopyIntoInfo {
         if (stage.isEmpty()) {
             throw new AnalysisException("Stage name can not be empty");
         }
-        this.userName = ClusterNamespace.getNameFromFullName(ctx.getCurrentUserIdentity().getQualifiedUser());
+        this.userName = ctx.getCurrentUserIdentity().getQualifiedUser();
         doValidate(userName, db, true);
     }
 
@@ -300,35 +297,12 @@ public class CopyIntoInfo {
         }
 
         // translate copy from description to copy from param
-        legacyCopyFromParam = toLegacyParam(copyFromDesc, analyzer, context, cascadesContext);
+        legacyCopyFromParam = toLegacyParam(copyFromDesc);
     }
 
-    private CopyFromParam toLegacyParam(CopyFromDesc copyFromDesc, ExpressionAnalyzer analyzer,
-                                        PlanTranslatorContext context, CascadesContext cascadesContext) {
+    private CopyFromParam toLegacyParam(CopyFromDesc copyFromDesc) {
         StageAndPattern stageAndPattern = copyFromDesc.getStageAndPattern();
-        List<Expr> exprList = null;
-        if (copyFromDesc.getExprList() != null) {
-            exprList = new ArrayList<>();
-            for (Expression expression : copyFromDesc.getExprList()) {
-                exprList.add(translateToLegacyExpr(expression, analyzer, context, cascadesContext));
-            }
-        }
-        Expr fileFilterExpr = null;
-        if (copyFromDesc.getFileFilterExpr().isPresent()) {
-            fileFilterExpr = translateToLegacyExpr(copyFromDesc.getFileFilterExpr().get(),
-                    analyzer, context, cascadesContext);
-        }
-        List<String> fileColumns = copyFromDesc.getFileColumns();
-        List<Expr> columnMappingList = null;
-        if (copyFromDesc.getColumnMappingList() != null) {
-            columnMappingList = new ArrayList<>();
-            for (Expression expression : copyFromDesc.getColumnMappingList()) {
-                columnMappingList.add(translateToLegacyExpr(expression, analyzer, context, cascadesContext));
-            }
-        }
-        List<String> targetColumns = copyFromDesc.getTargetColumns();
-        return new CopyFromParam(stageAndPattern, exprList, fileFilterExpr, fileColumns, columnMappingList,
-                targetColumns);
+        return new CopyFromParam(stageAndPattern);
     }
 
     private Expr translateToLegacyExpr(Expression expr, ExpressionAnalyzer analyzer, PlanTranslatorContext context,
@@ -349,7 +323,7 @@ public class CopyIntoInfo {
         public Expr visitCast(Cast cast, PlanTranslatorContext context) {
             // left child of cast is target type, right child of cast is expression
             return new CastExpr(cast.getDataType().toCatalogDataType(),
-                    cast.child().accept(this, context), null);
+                    cast.child().accept(this, context), cast.nullable());
         }
     }
 
@@ -373,7 +347,7 @@ public class CopyIntoInfo {
         brokerProperties.put(StorageProperties.FS_PROVIDER_KEY, objInfo.getProvider().toString().toUpperCase());
         StageProperties stageProperties = new StageProperties(stagePB.getPropertiesMap());
         this.copyIntoProperties.mergeProperties(stageProperties);
-        this.copyIntoProperties.analyze();
+        this.copyIntoProperties.validate();
     }
 
     public ShowResultSetMetaData getMetaData() {

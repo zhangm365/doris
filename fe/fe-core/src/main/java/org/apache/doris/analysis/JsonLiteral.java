@@ -17,14 +17,8 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.common.FormatOptions;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TJsonLiteral;
 
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
@@ -42,6 +36,7 @@ public class JsonLiteral extends LiteralExpr {
     public JsonLiteral() {
         super();
         type = Type.JSONB;
+        this.nullable = false;
     }
 
     public JsonLiteral(String value) throws AnalysisException {
@@ -52,7 +47,7 @@ public class JsonLiteral extends LiteralExpr {
         }
         this.value = value;
         type = Type.JSONB;
-        analysisDone();
+        this.nullable = false;
     }
 
     protected JsonLiteral(JsonLiteral other) {
@@ -84,30 +79,13 @@ public class JsonLiteral extends LiteralExpr {
     }
 
     @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return "'" + value.replaceAll("'", "''") + "'";
-    }
-
-    @Override
-    public String toSqlImpl() {
-        return "'" + value.replaceAll("'", "''") + "'";
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.JSON_LITERAL;
-        msg.json_literal = new TJsonLiteral(getUnescapedValue());
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitJsonLiteral(this, context);
     }
 
     @Override
     public String getStringValue() {
         return value;
-    }
-
-    @Override
-    protected String getStringValueInComplexTypeForQuery(FormatOptions options) {
-        return null;
     }
 
     public String getUnescapedValue() {

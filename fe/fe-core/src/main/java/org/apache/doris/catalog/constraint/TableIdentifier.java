@@ -56,7 +56,7 @@ public class TableIdentifier {
         }
         TableIf tableIf = databaseIf.getTableNullable(tableId);
         if (tableIf == null) {
-            throw new AnalysisException(String.format("Can not find table %s in constraint", databaseId));
+            throw new AnalysisException(String.format("Can not find table %s in constraint", tableId));
         }
         return tableIf;
     }
@@ -78,6 +78,19 @@ public class TableIdentifier {
     @Override
     public int hashCode() {
         return Objects.hash(catalogId, databaseId, tableId);
+    }
+
+    /**
+     * Resolve this identifier to a qualified name in the form "catalog.db.table".
+     * Returns null if the referenced objects no longer exist.
+     */
+    public String toQualifiedName() {
+        try {
+            TableIf tableIf = this.toTableIf();
+            return tableIf.getNameWithFullQualifiers();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override

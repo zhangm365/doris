@@ -60,7 +60,9 @@ enum TPlanNodeType {
   TEST_EXTERNAL_SCAN_NODE = 31,
   PARTITION_SORT_NODE = 32,
   GROUP_COMMIT_SCAN_NODE = 33,
-  MATERIALIZATION_NODE = 34
+  MATERIALIZATION_NODE = 34,
+  REC_CTE_NODE = 35,
+  REC_CTE_SCAN_NODE = 36
 }
 
 struct TKeyRange {
@@ -108,7 +110,8 @@ enum TFileFormatType {
     FORMAT_CSV_SNAPPYBLOCK = 14,
     FORMAT_WAL = 15,
     FORMAT_ARROW = 16,
-    FORMAT_TEXT = 17
+    FORMAT_TEXT = 17,
+    FORMAT_NATIVE = 18
 }
 
 // In previous versions, the data compression format and file format were stored together, as TFileFormatType,
@@ -287,8 +290,12 @@ struct TIcebergDeleteFileDesc {
     2: optional i64 position_lower_bound;
     3: optional i64 position_upper_bound;
     4: optional list<i32> field_ids;
-    // Iceberg file type, 0: data, 1: position delete, 2: equality delete.
+    // Iceberg file type, 0: data, 1: position delete, 2: equality delete, 3: deletion vector. 
     5: optional i32 content;
+    // 6 & 7 : iceberg v3 deletion vector.
+    // The content_offset and content_size_in_bytes fields are used to reference a specific blob for direct access to a deletion vector. 
+    6: optional i32 content_offset;
+    7: optional i32 content_size_in_bytes;
 }
 
 struct TIcebergFileDesc {
@@ -409,6 +416,8 @@ struct TTableFormatFileDesc {
     8: optional TLakeSoulFileDesc lakesoul_params
     9: optional i64 table_level_row_count = -1
     10: optional TRemoteDorisFileDesc remote_doris_params
+    // JDBC connection parameters (used when table_format_type == "jdbc")
+    11: optional map<string, string> jdbc_params
 }
 
 // Deprecated, hive text talbe is a special format, not a serde type
@@ -475,6 +484,13 @@ struct TFileScanRangeParams {
     25: optional i64 current_schema_id;
     // All schema information used in the current query process
     26: optional list<ExternalTableSchema.TSchema> history_schema_info
+
+    // Paimon predicate from FE, used for jni scanner
+    // Set at ScanNode level to avoid redundant serialization in each split
+    27: optional string paimon_predicate
+    // enable mapping varbinary type for Doris external table and TVF
+    28: optional bool enable_mapping_varbinary = false;
+    29: optional bool enable_mapping_timestamp_tz = false;
 }
 
 struct TFileRangeDesc {
@@ -506,6 +522,7 @@ struct TFileRangeDesc {
     14: optional i64 self_split_weight
     // whether the value of columns_from_path is null
     15: optional list<bool> columns_from_path_is_null;
+    16: optional bool file_cache_admission;
 }
 
 struct TSplitSource {
@@ -582,6 +599,7 @@ struct TBackendsMetadataParams {
 
 struct TFrontendsMetadataParams {
   1: optional string cluster_name
+  2: optional string current_connected_fe_host
 }
 
 struct TMaterializedViewsMetadataParams {
@@ -624,6 +642,15 @@ struct TQueriesMetadataParams {
 struct TMetaCacheStatsParams {
 }
 
+struct TParquetMetadataParams {
+  1: optional list<string> paths
+  2: optional string mode
+  3: optional Types.TFileType file_type
+  4: optional map<string, string> properties
+  5: optional string bloom_column
+  6: optional string bloom_literal
+}
+
 struct TMetaScanRange {
   1: optional Types.TMetadataType metadata_type
   2: optional TIcebergMetadataParams iceberg_params // deprecated
@@ -643,6 +670,7 @@ struct TMetaScanRange {
   14: optional map<string, string> hadoop_props
   15: optional string serialized_table;
   16: optional list<string> serialized_splits;
+  17: optional TParquetMetadataParams parquet_params;
 }
 
 // Specification of an individual data range which is held in its entirety
@@ -700,6 +728,29 @@ struct TBrokerScanNode {
 struct TFileScanNode {
     1: optional Types.TTupleId tuple_id
     2: optional string table_name
+}
+
+struct TRecCTETarget {
+    1: optional Types.TNetworkAddress addr
+    2: optional Types.TUniqueId fragment_instance_id
+    3: optional i32 node_id
+}
+
+struct TRecCTEResetInfo {
+    1: optional Types.TNetworkAddress addr
+    2: optional i32 fragment_id
+}
+
+struct TRecCTENode {
+    1: optional bool is_union_all
+    2: optional list<TRecCTETarget> targets
+    3: optional list<TRecCTEResetInfo> fragments_to_reset
+    4: optional list<list<Exprs.TExpr>> result_expr_lists
+    5: optional list<i32> rec_side_runtime_filter_ids
+    6: optional bool is_used_by_other_rec_cte
+}
+
+struct TRecCTEScanNode {
 }
 
 struct TEsScanNode {
@@ -812,7 +863,14 @@ enum TPushAggOp {
 	MINMAX = 1,
 	COUNT = 2,
 	MIX = 3,
-	COUNT_ON_INDEX = 4
+	COUNT_ON_INDEX = 4,
+	COUNT_NULL = 5
+}
+
+struct TScoreRangeInfo {
+  // Score range filter parameters for BM25 range queries like score() > 0.5
+  1: optional Opcodes.TExprOpcode op
+  2: optional double threshold
 }
 
 struct TOlapScanNode {
@@ -840,6 +898,11 @@ struct TOlapScanNode {
   20: optional i64 score_sort_limit
   21: optional TSortInfo ann_sort_info
   22: optional i64 ann_sort_limit
+  23: optional TScoreRangeInfo score_range_info
+  // Enable value predicate pushdown for MOR tables
+  24: optional bool enable_mor_value_predicate_pushdown
+  // Read MOR table as DUP table: skip merge, skip delete sign
+  25: optional bool read_mor_as_dup
 }
 
 struct TEqJoinCondition {
@@ -869,7 +932,11 @@ enum TJoinOp {
   // be rejected (ANTI-join), based on the other join conjuncts. This is in contrast
   // to LEFT_ANTI_JOIN where NULLs are not matches and therefore always returned.
   NULL_AWARE_LEFT_ANTI_JOIN = 10,
-  NULL_AWARE_LEFT_SEMI_JOIN = 11
+  NULL_AWARE_LEFT_SEMI_JOIN = 11,
+  ASOF_LEFT_INNER_JOIN = 12,
+  ASOF_RIGHT_INNER_JOIN = 13,
+  ASOF_LEFT_OUTER_JOIN = 14,
+  ASOF_RIGHT_OUTER_JOIN = 15
 }
 
 enum TJoinDistributionType {
@@ -914,6 +981,7 @@ struct THashJoinNode {
   // use_specific_projections true, if output exprssions is denoted by srcExprList represents, o.w. PlanNode.projections
   // deprecated
   14: optional bool use_specific_projections
+  15: optional Exprs.TExpr match_condition
 }
 
 struct TNestedLoopJoinNode {
@@ -1168,16 +1236,10 @@ struct TAnalyticNode {
   // order_by_exprs are empty
   7: optional Types.TTupleId buffered_tuple_id
 
-  // predicate that checks: child tuple is in the same partition as the buffered tuple,
-  // i.e. each partition expr is equal or both are not null. Only set if
-  // buffered_tuple_id is set; should be evaluated over a row that is composed of the
-  // child tuple and the buffered tuple
+  // Deprecated
   8: optional Exprs.TExpr partition_by_eq
 
-  // predicate that checks: the order_by_exprs are equal or both NULL when evaluated
-  // over the child tuple and the buffered tuple. only set if buffered_tuple_id is set;
-  // should be evaluated over a row that is composed of the child tuple and the buffered
-  // tuple
+  // Deprecated
   9: optional Exprs.TExpr order_by_eq
 
   10: optional bool is_colocate
@@ -1255,6 +1317,7 @@ struct TOlapRewriteNode {
 struct TTableFunctionNode {
     1: optional list<Exprs.TExpr> fnCallExprList
     2: optional list<Types.TSlotId> outputSlotIds
+    3: optional list<Exprs.TExpr> expand_conjuncts
 }
 
 // This contains all of the information computed by the plan as part of the resource
@@ -1402,7 +1465,7 @@ struct TPlanNode {
   4: required i64 limit
   5: required list<Types.TTupleId> row_tuples
 
-  // nullable_tuples[i] is true if row_tuples[i] is nullable
+  // Deprecated
   6: required list<bool> nullable_tuples
   7: optional list<Exprs.TExpr> conjuncts
 
@@ -1437,6 +1500,7 @@ struct TPlanNode {
   36: optional list<TRuntimeFilterDesc> runtime_filters
   37: optional TGroupCommitScanNode group_commit_scan_node
   38: optional TMaterializationNode materialization_node
+  39: optional TRecCTENode rec_cte_node
 
   // Use in vec exec engine
   40: optional Exprs.TExpr vconjunct
@@ -1459,6 +1523,8 @@ struct TPlanNode {
 
   50: optional list<list<Exprs.TExpr>> distribute_expr_lists
   51: optional bool is_serial_operator
+  52: optional TRecCTEScanNode rec_cte_scan_node
+
   // projections is final projections, which means projecting into results and materializing them into the output block.
   101: optional list<Exprs.TExpr> projections
   102: optional Types.TTupleId output_tuple_id

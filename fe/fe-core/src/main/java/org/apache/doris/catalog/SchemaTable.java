@@ -595,6 +595,14 @@ public class SchemaTable extends Table {
                                     .column("PROPERTY_VALUE", ScalarType.createStringType())
                                     .build())
             )
+            .put("database_properties",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "database_properties", TableType.SCHEMA,
+                            builder().column("CATALOG_NAME", ScalarType.createVarchar(NAME_CHAR_LEN))
+                                    .column("SCHEMA_NAME", ScalarType.createVarchar(NAME_CHAR_LEN))
+                                    .column("PROPERTY_NAME", ScalarType.createStringType())
+                                    .column("PROPERTY_VALUE", ScalarType.createStringType())
+                                    .build())
+            )
             .put("workload_group_resource_usage",
                     new SchemaTable(SystemIdGenerator.getNextId(), "workload_group_resource_usage", TableType.SCHEMA,
                             builder().column("BE_ID", ScalarType.createType(PrimitiveType.BIGINT))
@@ -616,10 +624,29 @@ public class SchemaTable extends Table {
             )
             .put("catalog_meta_cache_statistics",
                     new SchemaTable(SystemIdGenerator.getNextId(), "catalog_meta_cache_statistics", TableType.SCHEMA,
-                            builder().column("CATALOG_NAME", ScalarType.createStringType())
-                                    .column("CACHE_NAME", ScalarType.createStringType())
-                                    .column("METRIC_NAME", ScalarType.createStringType())
-                                    .column("METRIC_VALUE", ScalarType.createStringType())
+                            builder().column("FE_HOST", ScalarType.createStringType())
+                                    .column("CATALOG_NAME", ScalarType.createStringType())
+                                    .column("ENGINE_NAME", ScalarType.createStringType())
+                                    .column("ENTRY_NAME", ScalarType.createStringType())
+                                    .column("EFFECTIVE_ENABLED", ScalarType.createType(PrimitiveType.BOOLEAN))
+                                    .column("CONFIG_ENABLED", ScalarType.createType(PrimitiveType.BOOLEAN))
+                                    .column("AUTO_REFRESH", ScalarType.createType(PrimitiveType.BOOLEAN))
+                                    .column("TTL_SECOND", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("CAPACITY", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("ESTIMATED_SIZE", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("REQUEST_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("HIT_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("MISS_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("HIT_RATE", ScalarType.createType(PrimitiveType.DOUBLE))
+                                    .column("LOAD_SUCCESS_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("LOAD_FAILURE_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("TOTAL_LOAD_TIME_MS", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("AVG_LOAD_PENALTY_MS", ScalarType.createType(PrimitiveType.DOUBLE))
+                                    .column("EVICTION_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("INVALIDATE_COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                                    .column("LAST_LOAD_SUCCESS_TIME", ScalarType.createStringType())
+                                    .column("LAST_LOAD_FAILURE_TIME", ScalarType.createStringType())
+                                    .column("LAST_ERROR", ScalarType.createStringType())
                                     .build())
             )
             .put("backend_kerberos_ticket_cache",
@@ -676,6 +703,7 @@ public class SchemaTable extends Table {
                                     .column("USER_NAME", ScalarType.createStringType())
                                     .column("CURRENT_ABORT_TASK_NUM", ScalarType.createType(PrimitiveType.INT))
                                     .column("IS_ABNORMAL_PAUSE", ScalarType.createType(PrimitiveType.BOOLEAN))
+                                    .column("COMPUTE_GROUP", ScalarType.createStringType())
                                     .build())
             )
             .put("load_jobs",
@@ -705,6 +733,7 @@ public class SchemaTable extends Table {
             .put("file_cache_info",
                     new SchemaTable(SystemIdGenerator.getNextId(), "file_cache_info", TableType.SCHEMA,
                             builder().column("HASH", ScalarType.createStringType())
+                                    .column("OFFSET", ScalarType.createType(PrimitiveType.BIGINT))
                                     .column("TABLET_ID", ScalarType.createType(PrimitiveType.BIGINT))
                                     .column("SIZE", ScalarType.createType(PrimitiveType.BIGINT))
                                     .column("TYPE", ScalarType.createStringType())
@@ -805,6 +834,17 @@ public class SchemaTable extends Table {
                             .column("AUTO_SNAPSHOT", ScalarType.createType(PrimitiveType.BOOLEAN))
                             .column("MAX_RESERVED_SNAPSHOTS", ScalarType.createType(PrimitiveType.BIGINT))
                             .column("SNAPSHOT_INTERVAL_SECONDS", ScalarType.createType(PrimitiveType.BIGINT))
+                            .build()))
+            .put("authentication_integrations",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "authentication_integrations", TableType.SCHEMA,
+                        builder().column("NAME", ScalarType.createVarchar(256))
+                            .column("TYPE", ScalarType.createVarchar(64))
+                            .column("PROPERTIES", ScalarType.createStringType())
+                            .column("COMMENT", ScalarType.createStringType())
+                            .column("CREATE_USER", ScalarType.createStringType())
+                            .column("CREATE_TIME", ScalarType.createStringType())
+                            .column("ALTER_USER", ScalarType.createStringType())
+                            .column("MODIFY_TIME", ScalarType.createStringType())
                             .build()))
             .build();
 

@@ -29,11 +29,11 @@
 #include "runtime/exec_env.h"
 #include "runtime/fragment_mgr.h"
 #include "runtime/memory/global_memory_arbitrator.h"
+#include "runtime/runtime_profile.h"
 #include "runtime/thread_context.h"
 #include "runtime/workload_group/workload_group.h"
 #include "service/backend_options.h"
 #include "util/mem_info.h"
-#include "util/runtime_profile.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -106,6 +106,10 @@ MemTrackerLimiter::~MemTrackerLimiter() {
             "transfer memory tracking value between two trackers, can use transfer_to.";
     if (consumption() != 0) {
         if (open_memory_tracker_inaccurate_detect()) {
+            // Maybe the memory is recorded in orphan memory tracker, so that we print the stack trace in
+            // orphan memory tracker first to help us debug.
+            LOG(INFO) << "Orphan memory tracker consumption: "
+                      << ExecEnv::GetInstance()->orphan_mem_tracker()->print_address_sanitizers();
             std::string err_msg = fmt::format(
                     "mem tracker label: {}, consumption: {}, peak consumption: {}, {}.", label(),
                     consumption(), peak_consumption(), mem_tracker_inaccurate_msg);
@@ -116,6 +120,10 @@ MemTrackerLimiter::~MemTrackerLimiter() {
         }
         _mem_counter.set(0);
     } else if (open_memory_tracker_inaccurate_detect() && !_address_sanitizers.empty()) {
+        // Maybe the memory is recorded in orphan memory tracker, so that we print the stack trace in
+        // orphan memory tracker first to help us debug.
+        LOG(INFO) << "Orphan memory tracker consumption: "
+                  << ExecEnv::GetInstance()->orphan_mem_tracker()->print_address_sanitizers();
         LOG(FATAL) << "[Address Sanitizer] consumption is 0, but address sanitizers not empty. "
                    << ", mem tracker label: " << _label
                    << ", peak consumption: " << peak_consumption() << print_address_sanitizers();

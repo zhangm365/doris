@@ -19,11 +19,12 @@ package org.apache.doris.load.loadv2;
 
 import org.apache.doris.analysis.DataDescription;
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
 import org.apache.doris.analysis.SetVar;
 import org.apache.doris.analysis.StringLiteral;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.CustomThreadFactory;
 import org.apache.doris.common.LoadException;
@@ -32,6 +33,7 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.ByteBufferNetworkInputStream;
 import org.apache.doris.datasource.property.fileformat.CsvFileFormatProperties;
 import org.apache.doris.datasource.property.fileformat.FileFormatProperties;
+import org.apache.doris.httpv2.rest.manager.HttpUtils;
 import org.apache.doris.load.LoadJobRowResult;
 import org.apache.doris.load.StreamLoadHandler;
 import org.apache.doris.mysql.MysqlSerializer;
@@ -169,7 +171,7 @@ public class MysqlLoadManager {
             throws IOException, UserException {
         LoadJobRowResult loadResult = new LoadJobRowResult();
         List<String> filePaths = dataDesc.getFilePaths();
-        String database = ClusterNamespace.getNameFromFullName(dataDesc.getDbName());
+        String database = dataDesc.getDbName();
         String table = dataDesc.getTableName();
         int oldTimeout = context.getExecTimeoutS();
         int newTimeOut = extractTimeOut(dataDesc);
@@ -185,7 +187,7 @@ public class MysqlLoadManager {
         MySqlLoadContext loadContext = new MySqlLoadContext();
         loadContextMap.put(loadId, loadContext);
         LOG.info("Executing mysql load with id: {}.", loadId);
-        try (final CloseableHttpClient httpclient = HttpClients.createDefault()) {
+        try (final CloseableHttpClient httpclient = HttpUtils.getHttpClient()) {
             for (String file : filePaths) {
                 InputStreamEntity entity = getInputStreamEntity(context, clientLocal, file, loadId);
                 HttpPut request = generateRequestForMySqlLoadV2(entity, dataDesc, database, table, token);
@@ -236,7 +238,7 @@ public class MysqlLoadManager {
                                                                String loadId) throws IOException, UserException {
         LoadJobRowResult loadResult = new LoadJobRowResult();
         List<String> filePaths = dataDesc.getFilePaths();
-        String database = ClusterNamespace.getNameFromFullName(dataDesc.getDbName());
+        String database = dataDesc.getDbName();
         String table = dataDesc.getTableName();
         int oldTimeout = context.getExecTimeoutS();
         int newTimeOut = extractTimeOut(dataDesc);
@@ -393,7 +395,7 @@ public class MysqlLoadManager {
                 fieldString.append(",");
                 List<String> mappings = new ArrayList<>();
                 for (Expr expr : desc.getColumnMappingList()) {
-                    mappings.add(expr.toSql().replaceAll("`", ""));
+                    mappings.add(expr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE).replaceAll("`", ""));
                 }
                 fieldString.append(Joiner.on(",").join(mappings));
             }

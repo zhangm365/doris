@@ -17,7 +17,7 @@
 
 package org.apache.doris.analysis;
 
-public class ImportSequenceStmt extends StatementBase implements NotFallbackInParser {
+public class ImportSequenceStmt extends StatementBase {
     private String sequenceColName;
 
     public ImportSequenceStmt(String sequenceColName) {
@@ -26,10 +26,5 @@ public class ImportSequenceStmt extends StatementBase implements NotFallbackInPa
 
     public String getSequenceColName() {
         return sequenceColName;
-    }
-
-    @Override
-    public RedirectStatus getRedirectStatus() {
-        return null;
     }
 }

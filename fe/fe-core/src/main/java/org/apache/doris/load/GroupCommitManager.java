@@ -213,7 +213,15 @@ public class GroupCommitManager {
             try {
                 long backendId = new MasterOpExecutor(context)
                         .getGroupCommitLoadBeId(tableId, clusterName);
-                return Env.getCurrentSystemInfo().getBackend(backendId);
+                Backend be = Env.getCurrentSystemInfo().getBackend(backendId);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("selectBackendForGroupCommit on non-master: tableId={}, clusterName={},"
+                            + " backendId={}, backend={}, backendCluster={}",
+                            tableId, clusterName, backendId,
+                            be != null ? be.getHost() + ":" + be.getBePort() : "null",
+                            be != null ? be.getCloudClusterName() : "null");
+                }
+                return be;
             } catch (Exception e) {
                 throw new LoadException(e.getMessage());
             }
@@ -293,7 +301,8 @@ public class GroupCommitManager {
         }
         List<String> backendsInfo = backends.stream()
                 .map(be -> "{ beId=" + be.getId() + ", alive=" + be.isAlive() + ", active=" + be.isActive()
-                        + ", decommission=" + be.isDecommissioned() + " }")
+                        + ", decommissioned=" + be.isDecommissioned() + ", decommissioning=" + be.isDecommissioning()
+                        + " }")
                 .collect(Collectors.toList());
         throw new LoadException("No suitable backend for cloud cluster=" + cluster + ", backends = " + backendsInfo);
     }
@@ -348,7 +357,10 @@ public class GroupCommitManager {
                     return null;
                 }
                 Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
-                if (backend != null && backend.isAlive() && !backend.isDecommissioned()) {
+                if (backend != null && backend.isAlive() && !backend.isDecommissioned()
+                        && (!Config.isCloudMode() || !backend.isDecommissioning())
+                        && (!Config.isCloudMode() || cluster == null
+                                || cluster.equals(backend.getCloudClusterName()))) {
                     return backend.getId();
                 } else {
                     tableToBeMap.remove(encode(cluster, tableId));
@@ -365,7 +377,8 @@ public class GroupCommitManager {
         OlapTable table = (OlapTable) Env.getCurrentEnv().getInternalCatalog().getTableByTableId(tableId);
         Collections.shuffle(backends);
         for (Backend backend : backends) {
-            if (backend.isAlive() && !backend.isDecommissioned()) {
+            if (backend.isAlive() && !backend.isDecommissioned() && (!Config.isCloudMode()
+                    || !backend.isDecommissioning())) {
                 tableToBeMap.put(encode(cluster, tableId), backend.getId());
                 tableToPressureMap.put(tableId,
                         new SlidingWindowCounter(table.getGroupCommitIntervalMs() / 1000 + 1));

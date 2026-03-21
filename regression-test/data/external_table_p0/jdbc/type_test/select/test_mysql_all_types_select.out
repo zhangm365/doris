@@ -37,7 +37,7 @@ timestamp3	datetime(6)	Yes	true	\N
 char	char(5)	Yes	true	\N	
 varchar	varchar(10)	Yes	true	\N	
 text	text	Yes	true	\N	
-blob	text	Yes	true	\N	
+blob	varbinary(65535)	Yes	true	\N	
 json	text	Yes	true	\N	
 set	text	Yes	true	\N	
 bit	text	Yes	true	\N	
@@ -89,7 +89,7 @@ timestamp3	datetime(6)	No	true	\N
 char	char(5)	No	true	\N	
 varchar	varchar(10)	No	true	\N	
 text	text	No	true	\N	
-blob	text	No	true	\N	
+blob	varbinary(65535)	No	true	\N	
 json	text	No	true	\N	
 set	text	No	true	\N	
 bit	text	No	true	\N	
@@ -138,4 +138,31 @@ varbinary_c	varbinary(100)	Yes	true	\N
 3	0x48656C6C6F20576F726C6421
 4	\N
 5	0xAB
+
+-- !desc_timestamp_tz --
+id	int	Yes	true	\N	
+ts_ts	timestamptz	Yes	true	\N	
+ts_dt	datetime	Yes	true	\N	
+
+-- !select_timestamp_tz --
+1	2025-01-01 12:00:00+08:00	2025-01-01T12:00
+2	\N	\N
+
+-- !select_timestamp_tz2 --
+0
+
+-- !select_timestamp_tz3 --
+0
+
+-- !select_timestamp_tz5 --
+1	2025-01-01 12:00:00+08:00	2025-01-01T12:00
+2	\N	\N
+3	1999-10-10 12:00:00+08:00	1999-10-10T12:00
+4	\N	\N
+
+-- !select_timestamp_tz6 --
+1	2025-01-01 04:00:00+00:00	2025-01-01T12:00
+2	\N	\N
+3	1999-10-10 04:00:00+00:00	1999-10-10T12:00
+4	\N	\N
 

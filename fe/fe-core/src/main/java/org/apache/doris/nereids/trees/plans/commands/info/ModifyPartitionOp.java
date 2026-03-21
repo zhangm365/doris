@@ -18,11 +18,9 @@
 package org.apache.doris.nereids.trees.plans.commands.info;
 
 import org.apache.doris.alter.AlterOpType;
-import org.apache.doris.analysis.AlterTableClause;
-import org.apache.doris.analysis.ModifyPartitionClause;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.UserException;
-import org.apache.doris.common.util.PrintableMap;
+import org.apache.doris.common.util.DatasourcePrintableMap;
 import org.apache.doris.common.util.PropertyAnalyzer;
 import org.apache.doris.qe.ConnectContext;
 
@@ -103,11 +101,6 @@ public class ModifyPartitionOp extends AlterTableOp {
         checkProperties(Maps.newHashMap(properties));
     }
 
-    @Override
-    public AlterTableClause translateToLegacyAlterClause() {
-        return new ModifyPartitionClause(partitionNames, properties, isTempPartition, needExpand);
-    }
-
     // Check the following properties' legality before modifying partition.
     // 1. replication_num or replication_allocation
     // 2. storage_medium && storage_cooldown_time
@@ -140,6 +133,10 @@ public class ModifyPartitionOp extends AlterTableOp {
         return isTempPartition;
     }
 
+    public boolean isNeedExpand() {
+        return this.needExpand;
+    }
+
     @Override
     public boolean allowOpMTMV() {
         return false;
@@ -165,7 +162,7 @@ public class ModifyPartitionOp extends AlterTableOp {
         }
         sb.append(")");
         sb.append(" SET (");
-        sb.append(new PrintableMap<String, String>(properties, "=", true, false));
+        sb.append(new DatasourcePrintableMap<String, String>(properties, "=", true, false));
         sb.append(")");
 
         return sb.toString();

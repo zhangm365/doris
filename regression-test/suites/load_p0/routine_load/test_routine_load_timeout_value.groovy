@@ -78,6 +78,10 @@ suite("test_routine_load_timeout_value","nonConcurrent") {
         // create table
         def jobName = "test_routine_load_timeout_value"
         def tableName = "test_routine_load_timeout_value"
+
+        // Set routine_load_adaptive_min_batch_interval_sec to a small value to avoid affecting timeout test
+        sql "ADMIN SET FRONTEND CONFIG ('routine_load_adaptive_min_batch_interval_sec' = '5')"
+
         try {
             sql """
             CREATE TABLE IF NOT EXISTS ${tableName}
@@ -128,8 +132,8 @@ suite("test_routine_load_timeout_value","nonConcurrent") {
                 INDEX idx_ngrambf_k115 (`k15`) USING NGRAM_BF PROPERTIES("gram_size"="3", "bf_size"="256"),
                 INDEX idx_ngrambf_k116 (`k16`) USING NGRAM_BF PROPERTIES("gram_size"="3", "bf_size"="256"),
                 INDEX idx_ngrambf_k117 (`k17`) USING NGRAM_BF PROPERTIES("gram_size"="3", "bf_size"="256"),
-                INDEX idx_bitmap_k104 (`k02`) USING BITMAP,
-                INDEX idx_bitmap_k110 (`kd01`) USING BITMAP
+                INDEX idx_bitmap_k104 (`k02`) USING INVERTED,
+                INDEX idx_bitmap_k110 (`kd01`) USING INVERTED
                 
             )
             DUPLICATE KEY(k00)
@@ -210,6 +214,8 @@ suite("test_routine_load_timeout_value","nonConcurrent") {
         } finally {
             sql "stop routine load for ${jobName}"
             sql "DROP TABLE IF EXISTS ${tableName} FORCE"
+            // Restore routine_load_adaptive_min_batch_interval_sec to default value
+            sql "ADMIN SET FRONTEND CONFIG ('routine_load_adaptive_min_batch_interval_sec' = '360')"
         }
     }
 }

@@ -27,8 +27,11 @@
 #include "cloud/cloud_tablet.h"
 #include "cloud/config.h"
 #include "common/status.h"
-#include "olap/lru_cache.h"
+#include "cpp/sync_point.h"
 #include "runtime/memory/cache_policy.h"
+#include "util/debug_points.h"
+#include "util/lru_cache.h"
+#include "util/stack_util.h"
 
 namespace doris {
 uint64_t g_tablet_report_inactive_duration_ms = 0;
@@ -147,7 +150,9 @@ CloudTabletMgr::CloudTabletMgr(CloudStorageEngine& engine)
           _tablet_map(std::make_unique<TabletMap>()),
           _cache(std::make_unique<LRUCachePolicy>(
                   CachePolicy::CacheType::CLOUD_TABLET_CACHE, config::tablet_cache_capacity,
-                  LRUCacheType::NUMBER, 0, config::tablet_cache_shards, false /*enable_prune*/)) {}
+                  LRUCacheType::NUMBER, /*sweep time*/ 0, config::tablet_cache_shards,
+                  /*element_count_capacity*/ 0, /*enable_prune*/ false,
+                  /*is_lru_k*/ false)) {}
 
 CloudTabletMgr::~CloudTabletMgr() = default;
 
@@ -160,7 +165,9 @@ void set_tablet_access_time_ms(CloudTablet* tablet) {
 Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_id, bool warmup_data,
                                                                 bool sync_delete_bitmap,
                                                                 SyncRowsetStats* sync_stats,
-                                                                bool local_only) {
+                                                                bool force_use_only_cached,
+                                                                bool cache_on_miss) {
+    DBUG_EXECUTE_IF("CloudTabletMgr::get_tablet.block", DBUG_BLOCK);
     // LRU value type. `Value`'s lifetime MUST NOT be longer than `CloudTabletMgr`
     class Value : public LRUCacheValueBase {
     public:
@@ -174,26 +181,39 @@ Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_i
         TabletMap& tablet_map;
     };
 
+    VLOG_DEBUG << "get_tablet tablet_id=" << tablet_id << " stack: " << get_stack_trace();
+
     auto tablet_id_str = std::to_string(tablet_id);
     CacheKey key(tablet_id_str);
     auto* handle = _cache->lookup(key);
 
     if (handle == nullptr) {
-        if (local_only) {
+        if (force_use_only_cached) {
             LOG(INFO) << "tablet=" << tablet_id
-                      << "does not exists in local tablet cache, because param local_only=true, "
+                      << "does not exists in local tablet cache, because param "
+                         "force_use_only_cached=true, "
                          "treat it as an error";
             return ResultError(Status::InternalError(
                     "tablet={} does not exists in local tablet cache, because param "
-                    "local_only=true, "
+                    "force_use_only_cached=true, "
                     "treat it as an error",
                     tablet_id));
         }
+        TEST_SYNC_POINT("CloudTabletMgr::get_tablet.not_found_in_cache");
         if (sync_stats) {
             ++sync_stats->tablet_meta_cache_miss;
         }
-        auto load_tablet = [this, &key, warmup_data, sync_delete_bitmap,
-                            sync_stats](int64_t tablet_id) -> Result<std::shared_ptr<CloudTablet>> {
+        // Insert into cache and tablet_map inside SingleFlight lambda to ensure
+        // only the leader caller does this. Moving these outside the lambda causes
+        // a race condition: when multiple concurrent callers share the same CloudTablet*
+        // from SingleFlight, each creates a competing LRU cache entry. Delayed Value
+        // destructors then erase the tablet_map entry (the raw pointer safety check
+        // passes since all callers share the same pointer), and the tablet permanently
+        // disappears from tablet_map. Subsequent get_tablet() calls hit the LRU cache
+        // directly (cache hit path) which never re-inserts into tablet_map, making the
+        // tablet invisible to the compaction scheduler.
+        auto load_tablet = [this, &key, warmup_data, sync_delete_bitmap, sync_stats, cache_on_miss](
+                                   int64_t tablet_id) -> Result<std::shared_ptr<CloudTablet>> {
             TabletMetaSharedPtr tablet_meta;
             auto start = std::chrono::steady_clock::now();
             auto st = _engine.meta_mgr().get_tablet_meta(tablet_id, &tablet_meta);
@@ -208,7 +228,6 @@ Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_i
             }
 
             auto tablet = std::make_shared<CloudTablet>(_engine, std::move(tablet_meta));
-            auto value = std::make_unique<Value>(tablet, *_tablet_map);
             // MUST sync stats to let compaction scheduler work correctly
             SyncOptions options;
             options.warmup_delta_data = warmup_data;
@@ -219,13 +238,19 @@ Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_i
                 return ResultError(st);
             }
 
-            auto* handle = _cache->insert(key, value.release(), 1, sizeof(CloudTablet),
-                                          CachePriority::NORMAL);
-            auto ret =
-                    std::shared_ptr<CloudTablet>(tablet.get(), [this, handle](CloudTablet* tablet) {
-                        set_tablet_access_time_ms(tablet);
-                        _cache->release(handle);
-                    });
+            if (!cache_on_miss) {
+                set_tablet_access_time_ms(tablet.get());
+                return tablet;
+            }
+
+            auto value = std::make_unique<Value>(tablet, *_tablet_map);
+            auto* insert_handle = _cache->insert(key, value.release(), 1, sizeof(CloudTablet),
+                                                 CachePriority::NORMAL);
+            auto ret = std::shared_ptr<CloudTablet>(tablet.get(),
+                                                    [this, insert_handle](CloudTablet* tablet_ptr) {
+                                                        set_tablet_access_time_ms(tablet_ptr);
+                                                        _cache->release(insert_handle);
+                                                    });
             _tablet_map->put(std::move(tablet));
             return ret;
         };
@@ -249,6 +274,18 @@ Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_i
         _cache->release(handle);
     });
     return tablet;
+}
+
+bool CloudTabletMgr::peek_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta) {
+    if (tablet_meta == nullptr) {
+        return false;
+    }
+    auto tablet = _tablet_map->get(tablet_id);
+    if (!tablet) {
+        return false;
+    }
+    *tablet_meta = tablet->tablet_meta();
+    return true;
 }
 
 void CloudTabletMgr::erase_tablet(int64_t tablet_id) {
@@ -322,6 +359,10 @@ void CloudTabletMgr::vacuum_stale_rowsets(const CountDownLatch& stop_latch) {
                       << ", max useless rowset version count=" << max_useless_rowset_version_count
                       << ", tablet_id=" << tablet_id_with_max_useless_rowset_version_count;
         }
+    }
+    {
+        _tablet_map->traverse(
+                [](auto&& tablet) { tablet->clear_unused_visible_pending_rowsets(); });
     }
 }
 
@@ -401,10 +442,17 @@ Status CloudTabletMgr::get_topn_tablets_to_compact(
     auto now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
     auto skip = [now, compaction_type](CloudTablet* t) {
         auto* cloud_cluster_info = static_cast<CloudClusterInfo*>(ExecEnv::GetInstance()->cluster_info());
+
         if (config::enable_standby_passive_compaction && cloud_cluster_info->is_in_standby()) {
             if (t->fetch_add_approximate_num_rowsets(0) < config::max_tablet_version_num * config::standby_compaction_version_ratio) {
                 return true;
             }
+        }
+
+        // Compaction read-write separation: skip tablets that should be compacted by other clusters.
+        // Placed after standby check so standby invariants (version count threshold) are preserved.
+        if (cloud_cluster_info->should_skip_compaction(t)) {
+            return true;
         }
 
         int32_t max_version_config = t->max_version_config();
@@ -416,7 +464,7 @@ Status CloudTabletMgr::get_topn_tablets_to_compact(
             g_base_compaction_not_frozen_tablet_num << !is_frozen;
             return is_recent_failure || is_frozen;
         }
-        
+
         // If tablet has too many rowsets but not be compacted for a long time, compaction should be performed
         // regardless of whether there is a load job recently.
         bool is_recent_failure = now - t->last_cumu_compaction_failure_time() < config::min_compaction_failure_interval_ms;

@@ -88,7 +88,7 @@ public:
 
     Status submit_task(const TAgentTaskRequest& task) override;
 
-    Status submit_high_prior_and_cancel_low(const TAgentTaskRequest& task);
+    Status submit_high_prior_and_cancel_low(TAgentTaskRequest& task);
 
 private:
     void normal_loop();
@@ -204,6 +204,9 @@ void report_tablet_callback(StorageEngine& engine, const ClusterInfo* cluster_in
 void report_tablet_callback(CloudStorageEngine& engine, const ClusterInfo* cluster_info);
 
 void calc_delete_bitmap_callback(CloudStorageEngine& engine, const TAgentTaskRequest& req);
+
+void make_cloud_committed_rs_visible_callback(CloudStorageEngine& engine,
+                                              const TAgentTaskRequest& req);
 
 void report_index_policy_callback(const ClusterInfo* cluster_info);
 

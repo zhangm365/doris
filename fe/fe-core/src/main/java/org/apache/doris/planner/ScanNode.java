@@ -35,6 +35,7 @@ import org.apache.doris.analysis.TableSnapshot;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.analysis.TupleId;
 import org.apache.doris.catalog.Column;
+import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.PartitionInfo;
@@ -62,7 +63,7 @@ import com.google.common.collect.Range;
 import com.google.common.collect.RangeSet;
 import com.google.common.collect.Sets;
 import com.google.common.collect.TreeRangeSet;
-import org.apache.commons.collections.map.CaseInsensitiveMap;
+import org.apache.commons.collections4.map.CaseInsensitiveMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -70,6 +71,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -105,10 +107,13 @@ public abstract class ScanNode extends PlanNode implements SplitGenerator {
     // This is also important for local shuffle logic.
     // Now only OlapScanNode and FileQueryScanNode implement this.
     protected HashSet<Long> scanBackendIds = new HashSet<>();
+    // Immutable scan context used for evolving scan-related metadata.
+    protected final ScanContext scanContext;
 
-    public ScanNode(PlanNodeId id, TupleDescriptor desc, String planNodeName) {
+    public ScanNode(PlanNodeId id, TupleDescriptor desc, String planNodeName, ScanContext scanContext) {
         super(id, desc.getId().asList(), planNodeName);
         this.desc = desc;
+        this.scanContext = Objects.requireNonNull(scanContext, "scanContext can not be null");
     }
 
     protected List<Column> getColumns() {
@@ -258,10 +263,7 @@ public abstract class ScanNode extends PlanNode implements SplitGenerator {
         List<Range<ColumnBound>> result = Lists.newArrayList();
         if (expr instanceof BinaryPredicate) {
             BinaryPredicate binPred = (BinaryPredicate) expr;
-            ArrayList<Expr> partitionExprs = (partitionsInfo != null && partitionsInfo.enableAutomaticPartition())
-                    ? partitionsInfo.getPartitionExprs()
-                    : null;
-            Expr slotBinding = binPred.getSlotBinding(desc.getId(), partitionExprs);
+            Expr slotBinding = binPred.getSlotBinding(desc.getId());
             if (slotBinding == null || !slotBinding.isConstant() || !(slotBinding instanceof LiteralExpr)) {
                 return ColumnRanges.createFailure();
             }
@@ -351,10 +353,7 @@ public abstract class ScanNode extends PlanNode implements SplitGenerator {
                     continue;
                 }
 
-                ArrayList<Expr> partitionExprs = (partitionsInfo != null && partitionsInfo.enableAutomaticPartition())
-                        ? partitionsInfo.getPartitionExprs()
-                        : null;
-                Expr slotBinding = binPredicate.getSlotBinding(desc.getId(), partitionExprs);
+                Expr slotBinding = binPredicate.getSlotBinding(desc.getId());
 
                 if (slotBinding == null || !slotBinding.isConstant() || !(slotBinding instanceof LiteralExpr)) {
                     continue;
@@ -697,11 +696,21 @@ public abstract class ScanNode extends PlanNode implements SplitGenerator {
         return selectedSplitNum;
     }
 
+    public ScanContext getScanContext() {
+        return scanContext;
+    }
+
     @Override
     public boolean isSerialOperator() {
-        return numScanBackends() <= 0 || getScanRangeNum()
-                < ConnectContext.get().getSessionVariable().getParallelExecInstanceNum() * numScanBackends()
-                || (ConnectContext.get() != null && ConnectContext.get().getSessionVariable().isForceToLocalShuffle());
+        ConnectContext context = ConnectContext.get();
+        if (context == null) {
+            return numScanBackends() <= 0;
+        }
+        int parallelExecInstanceNum = context.getSessionVariable()
+                .getParallelExecInstanceNum(scanContext.getClusterName());
+        return numScanBackends() <= 0
+                || getScanRangeNum() < parallelExecInstanceNum * numScanBackends()
+                || context.getSessionVariable().isForceToLocalShuffle();
     }
 
     @Override
@@ -711,5 +720,13 @@ public abstract class ScanNode extends PlanNode implements SplitGenerator {
 
     public void setDesc(TupleDescriptor desc) {
         this.desc = desc;
+    }
+
+    public long getCatalogId() {
+        return Env.getCurrentInternalCatalog().getId();
+    }
+
+    protected boolean fileCacheAdmissionCheck() throws UserException {
+        return true;
     }
 }

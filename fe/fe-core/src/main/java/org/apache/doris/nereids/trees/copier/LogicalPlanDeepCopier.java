@@ -53,6 +53,9 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalOneRowRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPartitionTopN;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+import org.apache.doris.nereids.trees.plans.logical.LogicalRecursiveUnion;
+import org.apache.doris.nereids.trees.plans.logical.LogicalRecursiveUnionAnchor;
+import org.apache.doris.nereids.trees.plans.logical.LogicalRecursiveUnionProducer;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRepeat;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSink;
@@ -186,7 +189,22 @@ public class LogicalPlanDeepCopier extends DefaultPlanRewriter<DeepCopierContext
         List<NamedExpression> outputExpressions = aggregate.getOutputExpressions().stream()
                 .map(o -> (NamedExpression) ExpressionDeepCopier.INSTANCE.deepCopy(o, context))
                 .collect(ImmutableList.toImmutableList());
-        return aggregate.withChildGroupByAndOutput(groupByExpressions, outputExpressions, child);
+        LogicalAggregate<Plan> copiedAggregate = aggregate.withChildGroupByAndOutput(groupByExpressions,
+                outputExpressions, child);
+        Optional<LogicalRepeat<?>> childRepeat =
+                copiedAggregate.collectFirst(LogicalRepeat.class::isInstance);
+        List<Expression> partitionExpressions = ImmutableList.of();
+        if (aggregate.getPartitionExpressions().isPresent()) {
+            partitionExpressions = aggregate.getPartitionExpressions().get().stream()
+                    .map(k -> ExpressionDeepCopier.INSTANCE.deepCopy(k, context))
+                    .collect(ImmutableList.toImmutableList());
+        }
+        Optional<List<Expression>> optionalPartitionExpressions = partitionExpressions.isEmpty()
+                ? Optional.empty() : Optional.of(partitionExpressions);
+        return childRepeat.isPresent() ? aggregate.withChildGroupByAndOutputAndSourceRepeatAndPartitionExpr(
+                groupByExpressions, outputExpressions, optionalPartitionExpressions, child, childRepeat)
+                : aggregate.withChildGroupByAndOutputAndPartitionExpr(groupByExpressions, outputExpressions,
+                        optionalPartitionExpressions, child);
     }
 
     @Override
@@ -200,7 +218,9 @@ public class LogicalPlanDeepCopier extends DefaultPlanRewriter<DeepCopierContext
         List<NamedExpression> outputExpressions = repeat.getOutputExpressions().stream()
                 .map(e -> (NamedExpression) ExpressionDeepCopier.INSTANCE.deepCopy(e, context))
                 .collect(ImmutableList.toImmutableList());
-        return new LogicalRepeat<>(groupingSets, outputExpressions, child);
+        SlotReference groupingId = (SlotReference) ExpressionDeepCopier.INSTANCE
+                .deepCopy(repeat.getGroupingId().get(), context);
+        return new LogicalRepeat<>(groupingSets, outputExpressions, groupingId, repeat.getRepeatType(), child);
     }
 
     @Override
@@ -355,6 +375,38 @@ public class LogicalPlanDeepCopier extends DefaultPlanRewriter<DeepCopierContext
     }
 
     @Override
+    public Plan visitLogicalRecursiveUnion(LogicalRecursiveUnion<? extends Plan, ? extends Plan> recursiveCte,
+            DeepCopierContext context) {
+        List<Plan> children = recursiveCte.children().stream()
+                .map(c -> c.accept(this, context))
+                .collect(ImmutableList.toImmutableList());
+        List<NamedExpression> outputs = recursiveCte.getOutputs().stream()
+                .map(o -> (NamedExpression) ExpressionDeepCopier.INSTANCE.deepCopy(o, context))
+                .collect(ImmutableList.toImmutableList());
+        List<List<SlotReference>> childrenOutputs = recursiveCte.getRegularChildrenOutputs().stream()
+                .map(childOutputs -> childOutputs.stream()
+                        .map(o -> (SlotReference) ExpressionDeepCopier.INSTANCE.deepCopy(o, context))
+                        .collect(ImmutableList.toImmutableList()))
+                .collect(ImmutableList.toImmutableList());
+        return new LogicalRecursiveUnion(recursiveCte.getCteName(), recursiveCte.getQualifier(), outputs,
+                childrenOutputs, children);
+    }
+
+    @Override
+    public Plan visitLogicalRecursiveUnionAnchor(LogicalRecursiveUnionAnchor<? extends Plan> recursiveAnchor,
+            DeepCopierContext context) {
+        Plan child = recursiveAnchor.child().accept(this, context);
+        return new LogicalRecursiveUnionAnchor<>(recursiveAnchor.getCteId(), child);
+    }
+
+    @Override
+    public Plan visitLogicalRecursiveUnionProducer(LogicalRecursiveUnionProducer<? extends Plan> recursiveProducer,
+            DeepCopierContext context) {
+        Plan child = recursiveProducer.child().accept(this, context);
+        return new LogicalRecursiveUnionProducer<>(recursiveProducer.getCteName(), child);
+    }
+
+    @Override
     public Plan visitLogicalExcept(LogicalExcept except, DeepCopierContext context) {
         List<Plan> children = except.children().stream()
                 .map(c -> c.accept(this, context))
@@ -395,7 +447,11 @@ public class LogicalPlanDeepCopier extends DefaultPlanRewriter<DeepCopierContext
         List<Slot> generatorOutput = generate.getGeneratorOutput().stream()
                 .map(o -> (Slot) ExpressionDeepCopier.INSTANCE.deepCopy(o, context))
                 .collect(ImmutableList.toImmutableList());
-        return new LogicalGenerate<>(generators, generatorOutput, generate.getExpandColumnAlias(), child);
+        List<Expression> conjuncts = generate.getConjuncts().stream()
+                .map(p -> ExpressionDeepCopier.INSTANCE.deepCopy(p, context))
+                .collect(ImmutableList.toImmutableList());
+        return new LogicalGenerate<>(generators, generatorOutput, generate.getExpandColumnAlias(),
+                conjuncts, child);
     }
 
     @Override

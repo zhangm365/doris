@@ -63,11 +63,10 @@ public class RowCountAction extends RestBaseController {
             return ResponseEntityBuilder.badRequest("No table selected");
         }
 
-        String fullDbName = getFullDbName(dbName);
         Map<String, Long> indexRowCountMap = Maps.newHashMap();
         OlapTable olapTable;
         try {
-            Database db = Env.getCurrentInternalCatalog().getDbOrMetaException(fullDbName);
+            Database db = Env.getCurrentInternalCatalog().getDbOrMetaException(dbName);
             olapTable = (OlapTable) db.getTableOrMetaException(tableName, Table.TableType.OLAP);
         } catch (MetaNotFoundException e) {
             return ResponseEntityBuilder.okWithCommonError(e.getMessage());
@@ -75,7 +74,9 @@ public class RowCountAction extends RestBaseController {
         olapTable.readLock();
         try {
             for (Partition partition : olapTable.getAllPartitions()) {
-                long version = partition.getVisibleVersion();
+                // for local mode, getCachedVisibleVersion return visibleVersion.
+                // for cloud mode, the replica.checkVersionCatchUp always returns true.
+                long version = partition.getCachedVisibleVersion();
                 for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.VISIBLE)) {
                     long indexRowCount = 0L;
                     for (Tablet tablet : index.getTablets()) {

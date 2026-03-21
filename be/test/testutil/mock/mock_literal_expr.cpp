@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "mock_literal_expr.h"
+#include "testutil/mock/mock_literal_expr.h"
 
 #include <gtest/gtest.h>
 
+#include "core/block/materialize_block.h"
+#include "core/data_type/data_type_number.h"
 #include "testutil/column_helper.h"
-#include "vec/core/materialize_block.h"
-#include "vec/data_types/data_type_number.h"
 
-namespace doris::vectorized {
+namespace doris {
 
 TEST(MockLiteralTest, test) {
     {
         auto ctxs = MockLiteral::create<DataTypeInt64>({1, 2, 3, 4});
         Block block;
+        block.insert(ColumnHelper::create_column_with_name<DataTypeInt64>({0}));
         for (auto& ctx : ctxs) {
             int result_column_id = -1;
             EXPECT_TRUE(ctx->execute(&block, &result_column_id));
@@ -38,6 +39,7 @@ TEST(MockLiteralTest, test) {
 
         EXPECT_TRUE(ColumnHelper::block_equal(
                 block, Block {
+                               ColumnHelper::create_column_with_name<DataTypeInt64>({0}),
                                ColumnHelper::create_column_with_name<DataTypeInt64>({1}),
                                ColumnHelper::create_column_with_name<DataTypeInt64>({2}),
                                ColumnHelper::create_column_with_name<DataTypeInt64>({3}),
@@ -50,6 +52,7 @@ TEST(MockLiteralTest, test_const) {
     {
         auto ctxs = MockLiteral::create_const<DataTypeInt64>({1, 2, 3, 4}, 5);
         Block block;
+        block.insert(ColumnHelper::create_column_with_name<DataTypeInt64>({0, 0, 0, 0, 0}));
         for (auto& ctx : ctxs) {
             int result_column_id = -1;
             EXPECT_TRUE(ctx->execute(&block, &result_column_id));
@@ -62,6 +65,7 @@ TEST(MockLiteralTest, test_const) {
         EXPECT_TRUE(ColumnHelper::block_equal(
                 block,
                 Block {
+                        ColumnHelper::create_column_with_name<DataTypeInt64>({0, 0, 0, 0, 0}),
                         ColumnHelper::create_column_with_name<DataTypeInt64>({1, 1, 1, 1, 1}),
                         ColumnHelper::create_column_with_name<DataTypeInt64>({2, 2, 2, 2, 2}),
                         ColumnHelper::create_column_with_name<DataTypeInt64>({3, 3, 3, 3, 3}),
@@ -69,4 +73,4 @@ TEST(MockLiteralTest, test_const) {
                 }));
     }
 }
-} // namespace doris::vectorized
+} // namespace doris

@@ -22,7 +22,6 @@
 #include <mach-o/dyld.h>
 #endif
 
-#include <common/config.h>
 #include <ctype.h>
 #include <glog/logging.h>
 #include <libgen.h>
@@ -34,6 +33,8 @@
 
 #include <algorithm>
 #include <string>
+
+#include "common/config.h"
 // IWYU pragma: no_include <bits/chrono.h>
 #include <chrono> // IWYU pragma: keep
 #include <filesystem>
@@ -43,7 +44,7 @@
 
 #include "absl/strings/substitute.h"
 #include "gflags/gflags.h"
-#include "olap/olap_common.h"
+#include "storage/olap_common.h"
 
 DEFINE_bool(gen_out, false, "generate expected check data for test");
 DEFINE_bool(
@@ -157,9 +158,9 @@ std::string rand_rng_by_type(FieldType fieldType) {
     }
 }
 
-void load_columns_data_from_file(vectorized::MutableColumns& columns,
-                                 vectorized::DataTypeSerDeSPtrs serders, char col_spliter,
-                                 std::set<int> idxes, const std::string& column_data_file) {
+void load_columns_data_from_file(MutableColumns& columns, DataTypeSerDeSPtrs serders,
+                                 char col_spliter, std::set<int> idxes,
+                                 const std::string& column_data_file, const cctz::time_zone* tz) {
     ASSERT_EQ(serders.size(), columns.size());
     // Load column data and expected data from CSV files
     std::vector<std::vector<std::string>> res;
@@ -167,23 +168,23 @@ void load_columns_data_from_file(vectorized::MutableColumns& columns,
     if (stat(column_data_file.c_str(), &buff) == 0) {
         if (S_ISREG(buff.st_mode)) {
             // file
-            load_data_from_csv(serders, columns, column_data_file, col_spliter, idxes);
+            load_data_from_csv(serders, columns, column_data_file, col_spliter, idxes, tz);
         } else if (S_ISDIR(buff.st_mode)) {
             // dir
             std::filesystem::path fs_path(column_data_file);
             for (const auto& entry : std::filesystem::directory_iterator(fs_path)) {
                 std::string file_path = entry.path().string();
                 std::cout << "load data from file: " << file_path << std::endl;
-                load_data_from_csv(serders, columns, file_path, col_spliter, idxes);
+                load_data_from_csv(serders, columns, file_path, col_spliter, idxes, tz);
             }
         }
     }
 }
 
 // Helper function to load data from CSV, with index which splited by spliter and load to columns
-void load_data_from_csv(const vectorized::DataTypeSerDeSPtrs serders,
-                        vectorized::MutableColumns& columns, const std::string& file_path,
-                        const char spliter, const std::set<int> idxes) {
+void load_data_from_csv(const DataTypeSerDeSPtrs serders, MutableColumns& columns,
+                        const std::string& file_path, const char spliter, const std::set<int> idxes,
+                        const cctz::time_zone* tz) {
     ASSERT_EQ(serders.size(), columns.size())
             << "serder size: " << serders.size() << " column size: " << columns.size();
     ASSERT_EQ(serders.size(), idxes.size())
@@ -197,7 +198,8 @@ void load_data_from_csv(const vectorized::DataTypeSerDeSPtrs serders,
     }
 
     std::string line;
-    vectorized::DataTypeSerDe::FormatOptions options;
+    DataTypeSerDe::FormatOptions options;
+    options.timezone = tz;
     while (std::getline(file, line)) {
         std::stringstream lineStream(line);
         std::string value;
@@ -277,7 +279,8 @@ void check_or_generate_res_file(const std::string& res_file_path,
             std::string value;
             size_t col_idx = 0;
             while (std::getline(line_stream, value, ';')) {
-                EXPECT_EQ(value, res_columns[col_idx][line_idx]);
+                EXPECT_EQ(value, res_columns[col_idx][line_idx])
+                        << "line: " << line_idx << " col: " << col_idx;
                 col_idx++;
             }
             line_idx++;

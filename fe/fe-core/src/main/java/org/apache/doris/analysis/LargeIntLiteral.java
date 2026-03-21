@@ -18,17 +18,11 @@
 package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.PrimitiveType;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TLargeIntLiteral;
 
 import com.google.gson.annotations.SerializedName;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -40,27 +34,18 @@ public class LargeIntLiteral extends NumericLiteralExpr {
     public static final BigInteger LARGE_INT_MIN = new BigInteger("-170141183460469231731687303715884105728");
     // 2^127 - 1
     public static final BigInteger LARGE_INT_MAX = new BigInteger("170141183460469231731687303715884105727");
-    // 2^127
-    public static final BigInteger LARGE_INT_MAX_ABS = new BigInteger("170141183460469231731687303715884105728");
 
     @SerializedName("v")
     private BigInteger value;
 
     public LargeIntLiteral() {
         super();
-        analysisDone();
-    }
-
-    public LargeIntLiteral(boolean isMax) throws AnalysisException {
-        super();
-        type = Type.LARGEINT;
-        value = isMax ? LARGE_INT_MAX : LARGE_INT_MIN;
-        analysisDone();
     }
 
     public LargeIntLiteral(BigInteger v) {
         super();
         type = Type.LARGEINT;
+        this.nullable = false;
         value = v;
     }
 
@@ -81,27 +66,7 @@ public class LargeIntLiteral extends NumericLiteralExpr {
         }
         this.value = bigInt;
         type = Type.LARGEINT;
-        analysisDone();
-    }
-
-    public LargeIntLiteral(BigDecimal value) throws AnalysisException {
-        super();
-        BigInteger bigInt;
-        try {
-            bigInt = new BigInteger(value.toPlainString());
-            // ATTN: value from 'sql_parser.y' is always be positive. for example: '-256' will to be
-            // 256, and for int8_t, 256 is invalid, while -256 is valid. So we check the right border
-            // is LARGE_INT_MAX_ABS
-            // if (bigInt.compareTo(LARGE_INT_MIN) < 0 || bigInt.compareTo(LARGE_INT_MAX_ABS) > 0) {
-            if (bigInt.compareTo(LARGE_INT_MIN) < 0 || bigInt.compareTo(LARGE_INT_MAX) > 0) {
-                throw new AnalysisException("Large int literal is out of range: " + value);
-            }
-        } catch (NumberFormatException e) {
-            throw new AnalysisException("Invalid integer literal: " + value, e);
-        }
-        this.value = bigInt;
-        type = Type.LARGEINT;
-        analysisDone();
+        this.nullable = false;
     }
 
     protected LargeIntLiteral(LargeIntLiteral other) {
@@ -201,20 +166,8 @@ public class LargeIntLiteral extends NumericLiteralExpr {
     }
 
     @Override
-    public String toSqlImpl() {
-        return getStringValue();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return getStringValue();
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.LARGE_INT_LITERAL;
-        msg.large_int_literal = new TLargeIntLiteral(value.toString());
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitLargeIntLiteral(this, context);
     }
 
     @Override

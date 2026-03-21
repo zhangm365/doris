@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "vec/aggregate_functions/aggregate_function_ai_agg.h"
+#include "exprs/aggregate/aggregate_function_ai_agg.h"
 
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
@@ -24,16 +24,16 @@
 #include <string>
 #include <vector>
 
-#include "http/http_client.h"
+#include "core/arena.h"
+#include "core/column/column_string.h"
+#include "core/data_type/data_type_string.h"
+#include "exprs/aggregate/aggregate_function_simple_factory.h"
 #include "runtime/query_context.h"
+#include "service/http/http_client.h"
 #include "testutil/column_helper.h"
 #include "testutil/mock/mock_runtime_state.h"
-#include "vec/aggregate_functions/aggregate_function_simple_factory.h"
-#include "vec/columns/column_string.h"
-#include "vec/common/arena.h"
-#include "vec/data_types/data_type_string.h"
 
-namespace doris::vectorized {
+namespace doris {
 
 // declare function
 void register_aggregate_function_ai_agg(AggregateFunctionSimpleFactory& factory);
@@ -60,7 +60,7 @@ public:
         _data_types = {std::make_shared<DataTypeString>(), std::make_shared<DataTypeString>(),
                        std::make_shared<DataTypeString>()};
 
-        _agg_function = _factory->get("ai_agg", _data_types, false, -1);
+        _agg_function = _factory->get("ai_agg", _data_types, nullptr, false, -1);
         ASSERT_TRUE(_agg_function != nullptr);
 
         _agg_function->set_query_context(_query_ctx.get());
@@ -413,4 +413,32 @@ TEST_F(AggregateFunctionAIAggTest, mock_resource_send_request_test) {
     _agg_function->destroy(place);
 }
 
-} // namespace doris::vectorized
+TEST_F(AggregateFunctionAIAggTest, missing_ai_resources_metadata_test) {
+    auto empty_query_ctx = MockQueryContext::create();
+    _agg_function->set_query_context(empty_query_ctx.get());
+
+    std::vector<std::string> resources = {"resource_name"};
+    std::vector<std::string> texts = {"test input"};
+    std::vector<std::string> task = {"summarize"};
+    auto col_resource = ColumnHelper::create_column<DataTypeString>(resources);
+    auto col_text = ColumnHelper::create_column<DataTypeString>(texts);
+    auto col_task = ColumnHelper::create_column<DataTypeString>(task);
+
+    std::unique_ptr<char[]> memory(new char[_agg_function->size_of_data()]);
+    AggregateDataPtr place = memory.get();
+    _agg_function->create(place);
+
+    const IColumn* columns[3] = {col_resource.get(), col_text.get(), col_task.get()};
+
+    try {
+        _agg_function->add(place, columns, 0, _arena);
+        FAIL() << "Expected exception for missing AI resources";
+    } catch (const Exception& e) {
+        EXPECT_EQ(e.code(), ErrorCode::INTERNAL_ERROR);
+        EXPECT_NE(e.to_string().find("AI resources metadata missing"), std::string::npos);
+    }
+
+    _agg_function->destroy(place);
+}
+
+} // namespace doris

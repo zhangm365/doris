@@ -21,10 +21,13 @@
 package org.apache.doris.planner;
 
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
+import org.apache.doris.analysis.ExprToThriftVisitor;
 import org.apache.doris.analysis.JoinOperator;
 import org.apache.doris.analysis.SlotDescriptor;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StatementBase;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.analysis.TupleDescriptor;
 import org.apache.doris.common.TreeNode;
 import org.apache.doris.nereids.trees.plans.distribute.NereidsSpecifyInstances;
@@ -40,7 +43,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.Lists;
 import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -155,7 +158,7 @@ public class PlanFragment extends TreeNode<PlanFragment> {
 
     // has colocate plan node
     protected boolean hasColocatePlanNode = false;
-    protected final Supplier<Boolean> hasBucketShuffleJoin;
+    protected final Supplier<Boolean> hasBucketShuffleNode;
 
     private TResultSinkType resultSinkType = TResultSinkType.MYSQL_PROTOCOL;
 
@@ -176,7 +179,7 @@ public class PlanFragment extends TreeNode<PlanFragment> {
         this.transferQueryStatisticsWithEveryBatch = false;
         this.builderRuntimeFilterIds = new HashSet<>();
         this.targetRuntimeFilterIds = new HashSet<>();
-        this.hasBucketShuffleJoin = buildHasBucketShuffleJoin();
+        this.hasBucketShuffleNode = buildHasBucketShuffleNode();
         setParallelExecNumIfExists();
         setFragmentInPlanTree(planRoot);
     }
@@ -193,11 +196,18 @@ public class PlanFragment extends TreeNode<PlanFragment> {
         this.targetRuntimeFilterIds = new HashSet<>(targetRuntimeFilterIds);
     }
 
-    private Supplier<Boolean> buildHasBucketShuffleJoin() {
+    private Supplier<Boolean> buildHasBucketShuffleNode() {
         return Suppliers.memoize(() -> {
             List<HashJoinNode> hashJoinNodes = getPlanRoot().collectInCurrentFragment(HashJoinNode.class::isInstance);
             for (HashJoinNode hashJoinNode : hashJoinNodes) {
                 if (hashJoinNode.isBucketShuffle()) {
+                    return true;
+                }
+            }
+            List<SetOperationNode> setOperationNodes
+                    = getPlanRoot().collectInCurrentFragment(SetOperationNode.class::isInstance);
+            for (SetOperationNode setOperationNode : setOperationNodes) {
+                if (setOperationNode.isBucketShuffle()) {
                     return true;
                 }
             }
@@ -228,8 +238,10 @@ public class PlanFragment extends TreeNode<PlanFragment> {
      * Assign ParallelExecNum by default value for Asynchronous request
      */
     public void setParallelExecNumIfExists() {
-        if (ConnectContext.get() != null) {
-            parallelExecNum = ConnectContext.get().getSessionVariable().getParallelExecInstanceNum();
+        ConnectContext context = ConnectContext.get();
+        if (context != null) {
+            String clusterName = context.getSessionVariable().resolveCloudClusterName(context);
+            parallelExecNum = context.getSessionVariable().getParallelExecInstanceNum(clusterName);
         }
     }
 
@@ -267,8 +279,8 @@ public class PlanFragment extends TreeNode<PlanFragment> {
         this.hasColocatePlanNode = hasColocatePlanNode;
     }
 
-    public boolean hasBucketShuffleJoin() {
-        return hasBucketShuffleJoin.get();
+    public boolean hasBucketShuffleNode() {
+        return hasBucketShuffleNode.get();
     }
 
     public void setResultSinkType(TResultSinkType resultSinkType) {
@@ -325,7 +337,7 @@ public class PlanFragment extends TreeNode<PlanFragment> {
             result.setPlan(planRoot.treeToThrift());
         }
         if (outputExprs != null) {
-            result.setOutputExprs(Expr.treesToThrift(outputExprs));
+            result.setOutputExprs(ExprToThriftVisitor.treesToThrift(outputExprs));
         }
         if (sink != null) {
             result.setOutputSink(sink.toThrift());
@@ -347,7 +359,9 @@ public class PlanFragment extends TreeNode<PlanFragment> {
         Preconditions.checkState(dataPartition != null);
         if (CollectionUtils.isNotEmpty(outputExprs)) {
             str.append("  OUTPUT EXPRS:\n    ");
-            str.append(outputExprs.stream().map(Expr::toSql).collect(Collectors.joining("\n    ")));
+            str.append(outputExprs.stream()
+                    .map(e -> e.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE))
+                    .collect(Collectors.joining("\n    ")));
         }
         str.append("\n");
         str.append("  PARTITION: " + dataPartition.getExplainString(explainLevel) + "\n");

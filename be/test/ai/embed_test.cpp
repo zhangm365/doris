@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "vec/functions/ai/embed.h"
+#include "exprs/function/ai/embed.h"
 
 #include <curl/curl.h>
 #include <gen_cpp/PaloInternalService_types.h>
@@ -25,11 +25,11 @@
 #include <string>
 #include <vector>
 
+#include "exprs/function/ai/ai_adapter.h"
 #include "testutil/column_helper.h"
 #include "testutil/mock/mock_runtime_state.h"
-#include "vec/functions/ai/ai_adapter.h"
 
-namespace doris::vectorized {
+namespace doris {
 
 class MockHttpClient : public HttpClient {
 public:
@@ -186,6 +186,17 @@ TEST(EMBED_TEST, local_adapter_parse_embedding_response) {
     ASSERT_EQ(results[0].size(), 3);
     ASSERT_FLOAT_EQ(results[0][0], 0.1F);
     ASSERT_FLOAT_EQ(results[0][2], 0.3F);
+
+    std::string resp3 = R"({
+        "embeddings": [[0.6, 0.7]]
+    })";
+    results.clear();
+    st = adapter.parse_embedding_response(resp3, results);
+    ASSERT_TRUE(st.ok()) << "Format 3 failed: " << st.to_string();
+    ASSERT_EQ(results.size(), 1);
+    ASSERT_EQ(results[0].size(), 2);
+    ASSERT_FLOAT_EQ(results[0][0], 0.6F);
+    ASSERT_FLOAT_EQ(results[0][1], 0.7F);
 }
 
 TEST(EMBED_TEST, openai_adapter_embedding_request) {
@@ -716,4 +727,4 @@ TEST(EMBED_TEST, minimax_adapter_embedding_request) {
     ASSERT_STREQ(doc["texts"][0].GetString(), "embed with minimax");
 }
 
-} // namespace doris::vectorized
+} // namespace doris

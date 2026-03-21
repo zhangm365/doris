@@ -24,6 +24,7 @@ import org.apache.doris.nereids.PlannerHook;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.memo.Group;
 import org.apache.doris.nereids.memo.StructInfoMap;
+import org.apache.doris.nereids.properties.OrderKey;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.analysis.BindRelation;
 import org.apache.doris.nereids.rules.exploration.mv.PartitionIncrementMaintainer.PartitionIncrementCheckContext;
@@ -270,32 +271,33 @@ public class MaterializedViewUtils {
      * Extract struct info from plan, support to get struct info from logical plan or plan in group.
      * @param plan maybe remove unnecessary plan node, and the logical output maybe wrong
      * @param originalPlan original plan, the output is right
+     * @param cascadesContext the cascadesContext when extractStructInfo
+     * @param targetTableIdSet the target relation id set which used to filter struct info,
+     *                            empty means no struct info match
      */
-    public static List<StructInfo> extractStructInfo(Plan plan, Plan originalPlan, CascadesContext cascadesContext,
-            BitSet materializedViewTableSet) {
+    public static List<StructInfo> extractStructInfoFuzzy(Plan plan, Plan originalPlan,
+                                                          CascadesContext cascadesContext, BitSet targetTableIdSet) {
         // If plan belong to some group, construct it with group struct info
         if (plan.getGroupExpression().isPresent()) {
             Group ownerGroup = plan.getGroupExpression().get().getOwnerGroup();
             StructInfoMap structInfoMap = ownerGroup.getStructInfoMap();
             // Refresh struct info in current level plan from top to bottom
             SessionVariable sessionVariable = cascadesContext.getConnectContext().getSessionVariable();
-            structInfoMap.refresh(ownerGroup, cascadesContext, new BitSet(), new HashSet<>(),
-                    sessionVariable.isEnableMaterializedViewNestRewrite());
-            structInfoMap.setRefreshVersion(cascadesContext.getMemo().getRefreshVersion());
-            Set<BitSet> queryTableSets = structInfoMap.getTableMaps();
+            int memoVersion = StructInfoMap.getMemoVersion(targetTableIdSet,
+                    cascadesContext.getMemo().getRefreshVersion());
+            structInfoMap.refresh(ownerGroup, cascadesContext, targetTableIdSet, new HashSet<>(),
+                    sessionVariable.isEnableMaterializedViewNestRewrite(), memoVersion, true);
+            structInfoMap.setRefreshVersion(targetTableIdSet, cascadesContext.getMemo().getRefreshVersion());
+            Set<BitSet> queryTableIdSets = structInfoMap.getTableMaps(true);
             ImmutableList.Builder<StructInfo> structInfosBuilder = ImmutableList.builder();
-            if (!queryTableSets.isEmpty()) {
-                for (BitSet queryTableSet : queryTableSets) {
-                    // TODO As only support MatchMode.COMPLETE, so only get equaled query table struct info
-                    BitSet queryCommonTableSet = MaterializedViewUtils.transformToCommonTableId(queryTableSet,
-                            cascadesContext.getStatementContext().getRelationIdToCommonTableIdMap());
+            if (!queryTableIdSets.isEmpty()) {
+                for (BitSet queryTableIdSet : queryTableIdSets) {
                     // compare relation id corresponding table id
-                    if (!materializedViewTableSet.isEmpty()
-                            && !materializedViewTableSet.equals(queryCommonTableSet)) {
+                    if (!containsAll(targetTableIdSet, queryTableIdSet)) {
                         continue;
                     }
-                    StructInfo structInfo = structInfoMap.getStructInfo(cascadesContext, queryTableSet, ownerGroup,
-                            originalPlan, sessionVariable.isEnableMaterializedViewNestRewrite());
+                    StructInfo structInfo = structInfoMap.getStructInfo(cascadesContext, queryTableIdSet, ownerGroup,
+                            originalPlan, sessionVariable.isEnableMaterializedViewNestRewrite(), true);
                     if (structInfo != null) {
                         structInfosBuilder.add(structInfo);
                     }
@@ -587,6 +589,22 @@ public class MaterializedViewUtils {
     }
 
     /**
+     * Checks if the superset contains all of the set bits from the subset.
+     *
+     * @param superset The BitSet expected to contain the bits.
+     * @param subset   The BitSet whose set bits are to be checked.
+     * @return true if all bits set in the subset are also set in the superset, false otherwise.
+     */
+    public static boolean containsAll(BitSet superset, BitSet subset) {
+        // Clone the subset to avoid modifying the original instance.
+        BitSet temp = (BitSet) subset.clone();
+        // Remove all bits from temp that are also present in the superset.
+        // temp.andNot(superset) is equivalent to the operation: temp = temp AND (NOT superset)
+        temp.andNot(superset);
+        return temp.isEmpty();
+    }
+
+    /**
      * Check the query if Contains query operator
      * Such sql as following should return true
      * select * from orders TABLET(10098) because TABLET(10098) should return true
@@ -635,5 +653,24 @@ public class MaterializedViewUtils {
             }
             return false;
         }
+    }
+
+    /**
+     * Check the prefix of two order key list is same from start
+     */
+    public static boolean isPrefixSameFromStart(List<OrderKey> queryShuttledOrderKeys,
+                                                 List<OrderKey> viewShuttledOrderKeys) {
+        if (queryShuttledOrderKeys == null || viewShuttledOrderKeys == null) {
+            return false;
+        }
+        if (queryShuttledOrderKeys.size() > viewShuttledOrderKeys.size()) {
+            return false;
+        }
+        for (int i = 0; i < queryShuttledOrderKeys.size(); i++) {
+            if (!java.util.Objects.equals(queryShuttledOrderKeys.get(i), viewShuttledOrderKeys.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -30,12 +30,14 @@
 #include "common/util.h"
 #include "cpp/sync_point.h"
 #include "meta-service/meta_service.h"
+#include "meta-store/blob_message.h"
 #include "meta-store/document_message.h"
 #include "meta-store/keys.h"
 #include "meta-store/meta_reader.h"
 #include "meta-store/txn_kv.h"
 #include "meta-store/txn_kv_error.h"
 #include "meta-store/versioned_value.h"
+#include "meta-store/versionstamp.h"
 
 namespace doris::cloud {
 // External functions from meta_service_test.cpp
@@ -101,6 +103,31 @@ static std::string dump_range(TxnKv* txn_kv, std::string_view begin = "",
     }
     EXPECT_TRUE(iter->is_valid()); // The iterator should still be valid after the next call.
     return buffer;
+}
+
+// It will get the latest versioned values.
+TxnErrorCode read_operation_log(Transaction* txn, std::string_view log_key,
+                                Versionstamp* log_version, OperationLogPB* operation_log) {
+    std::string begin_key = encode_versioned_key(log_key, Versionstamp::min());
+    std::string end_key = encode_versioned_key(log_key, Versionstamp::max());
+    auto iter = blob_get_range(txn, begin_key, end_key);
+    if (!iter->valid()) {
+        TxnErrorCode err = iter->error_code();
+        if (err != TxnErrorCode::TXN_OK) {
+            return err;
+        }
+        return TxnErrorCode::TXN_KEY_NOT_FOUND;
+    }
+    for (; iter->valid(); iter->next()) {
+        std::string_view key = iter->key();
+        if (!decode_versioned_key(&key, log_version)) {
+            return TxnErrorCode::TXN_INVALID_DATA;
+        }
+        if (!iter->parse_value(operation_log)) {
+            return TxnErrorCode::TXN_INVALID_DATA;
+        }
+    }
+    return iter->error_code();
 }
 
 TEST(MetaServiceOperationLogTest, CommitPartitionLog) {
@@ -200,10 +227,9 @@ TEST(MetaServiceOperationLogTest, CommitPartitionLog) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &version2, &value), TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &version2, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_commit_partition());
     }
 
@@ -371,10 +397,9 @@ TEST(MetaServiceOperationLogTest, DropPartitionLog) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &version2, &value), TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &version2, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_drop_partition());
         ASSERT_EQ(operation_log.drop_partition().partition_ids_size(), 1);
         ASSERT_EQ(operation_log.drop_partition().partition_ids(0), partition_id + 3);
@@ -400,6 +425,7 @@ TEST(MetaServiceOperationLogTest, CommitIndexLog) {
     constexpr int64_t db_id = 123;
     constexpr int64_t table_id = 10001;
     constexpr int64_t index_id = 10002;
+    constexpr int64_t part_id = 10003;
 
     {
         // write instance
@@ -436,12 +462,17 @@ TEST(MetaServiceOperationLogTest, CommitIndexLog) {
         req.set_table_id(table_id);
         req.add_index_ids(index_id);
         req.set_is_new_table(true);
+        for (size_t i = 0; i < 5; i++) {
+            req.add_partition_ids(part_id + i);
+        }
         meta_service->commit_index(&ctrl, &req, &res, nullptr);
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().DebugString();
     }
 
     auto txn_kv = meta_service->txn_kv();
     Versionstamp version1;
+    Versionstamp version2;
+
     {
         // Verify index meta/index/inverted indexes are exists
         std::string index_meta_key = versioned::meta_index_key({instance_id, index_id});
@@ -463,7 +494,35 @@ TEST(MetaServiceOperationLogTest, CommitIndexLog) {
         ASSERT_EQ(index_index.table_id(), table_id);
     }
 
-    Versionstamp version2;
+    {
+        // Verify table version exists
+        MetaReader meta_reader(instance_id, txn_kv.get());
+        ASSERT_EQ(meta_reader.get_table_version(table_id, &version2), TxnErrorCode::TXN_OK);
+    }
+
+    {
+        for (size_t i = 0; i < 5; i++) {
+            std::string part_index_key = versioned::partition_index_key({instance_id, part_id + i});
+            std::string part_meta_key = versioned::meta_partition_key({instance_id, part_id + i});
+            std::string part_inverted_index_key = versioned::partition_inverted_index_key(
+                    {instance_id, db_id, table_id, part_id + i});
+            std::unique_ptr<Transaction> txn;
+            ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+            std::string value;
+            ASSERT_EQ(versioned_get(txn.get(), part_meta_key, &version1, &value),
+                      TxnErrorCode::TXN_OK);
+
+            ASSERT_EQ(txn->get(part_index_key, &value), TxnErrorCode::TXN_OK);
+
+            PartitionIndexPB part_index;
+            ASSERT_TRUE(part_index.ParseFromString(value));
+            ASSERT_EQ(part_index.db_id(), db_id);
+            ASSERT_EQ(part_index.table_id(), table_id);
+
+            ASSERT_EQ(txn->get(part_inverted_index_key, &value), TxnErrorCode::TXN_OK);
+        }
+    }
+
     {
         // Verify table version exists
         MetaReader meta_reader(instance_id, txn_kv.get());
@@ -477,10 +536,9 @@ TEST(MetaServiceOperationLogTest, CommitIndexLog) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &version2, &value), TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &version2, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_commit_index());
     }
 
@@ -712,10 +770,9 @@ TEST(MetaServiceOperationLogTest, DropIndexLog) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &version, &value), TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &version, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_drop_index());
         ASSERT_EQ(operation_log.drop_index().index_ids_size(), 1);
         ASSERT_EQ(operation_log.drop_index().index_ids(0), index_id + 3);
@@ -906,10 +963,9 @@ TEST(MetaServiceOperationLogTest, CommitTxn) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &version, &value), TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &version, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_commit_txn());
 
         const auto& commit_log = operation_log.commit_txn();
@@ -1055,11 +1111,9 @@ TEST(MetaServiceOperationLogTest, CommitTxnEventually) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &commit_versionstamp, &value),
-                  TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &commit_versionstamp, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_commit_txn());
 
         const auto& commit_log = operation_log.commit_txn();
@@ -1349,11 +1403,9 @@ TEST(MetaServiceOperationLogTest, CommitTxnWithSubTxn) {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
         std::string log_key = versioned::log_key({instance_id});
-        std::string value;
-        ASSERT_EQ(versioned_get(txn.get(), log_key, &commit_versionstamp, &value),
-                  TxnErrorCode::TXN_OK);
         OperationLogPB operation_log;
-        ASSERT_TRUE(operation_log.ParseFromString(value));
+        ASSERT_EQ(read_operation_log(txn.get(), log_key, &commit_versionstamp, &operation_log),
+                  TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_commit_txn());
 
         const auto& commit_log = operation_log.commit_txn();
@@ -1473,7 +1525,7 @@ TEST(MetaServiceOperationLogTest, UpdateVersionedTabletMeta) {
         std::string log_key = versioned::log_key(instance_id);
         OperationLogPB operation_log;
         TxnErrorCode err =
-                versioned::document_get(txn.get(), log_key, &operation_log, &log_versionstamp);
+                read_operation_log(txn.get(), log_key, &log_versionstamp, &operation_log);
         ASSERT_EQ(err, TxnErrorCode::TXN_OK);
         ASSERT_TRUE(operation_log.has_update_tablet());
         EXPECT_EQ(operation_log.update_tablet().tablet_ids_size(), 2);

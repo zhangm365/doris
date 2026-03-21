@@ -125,7 +125,13 @@ class ChildOutputPropertyDeriverTest {
 
     @Test
     void testInnerJoin() {
-        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(JoinType.INNER_JOIN,
+        testInnerJoinHelper(JoinType.INNER_JOIN);
+        testInnerJoinHelper(JoinType.ASOF_LEFT_INNER_JOIN);
+        testInnerJoinHelper(JoinType.ASOF_RIGHT_INNER_JOIN);
+    }
+
+    private void testInnerJoinHelper(JoinType joinType) {
+        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(joinType,
                 ExpressionUtils.EMPTY_CONDITION, ExpressionUtils.EMPTY_CONDITION, new DistributeHint(DistributeType.NONE), Optional.empty(), logicalProperties,
                 groupPlan, groupPlan);
         GroupExpression groupExpression = new GroupExpression(join);
@@ -203,7 +209,12 @@ class ChildOutputPropertyDeriverTest {
 
     @Test
     void testLeftOuterJoin() {
-        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(JoinType.LEFT_OUTER_JOIN,
+        testLeftOuterJoinHelper(JoinType.LEFT_OUTER_JOIN);
+        testLeftOuterJoinHelper(JoinType.ASOF_LEFT_OUTER_JOIN);
+    }
+
+    private void testLeftOuterJoinHelper(JoinType joinType) {
+        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(joinType,
                 ExpressionUtils.EMPTY_CONDITION, ExpressionUtils.EMPTY_CONDITION, new DistributeHint(DistributeType.NONE), Optional.empty(), logicalProperties,
                 groupPlan, groupPlan);
         GroupExpression groupExpression = new GroupExpression(join);
@@ -450,7 +461,12 @@ class ChildOutputPropertyDeriverTest {
 
     @Test
     void testRightOuterJoin() {
-        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(JoinType.RIGHT_OUTER_JOIN,
+        testRightOuterJoinHelper(JoinType.RIGHT_OUTER_JOIN);
+        testRightOuterJoinHelper(JoinType.ASOF_RIGHT_OUTER_JOIN);
+    }
+
+    private void testRightOuterJoinHelper(JoinType joinType) {
+        PhysicalHashJoin<GroupPlan, GroupPlan> join = new PhysicalHashJoin<>(joinType,
                 ExpressionUtils.EMPTY_CONDITION, ExpressionUtils.EMPTY_CONDITION, new DistributeHint(DistributeType.NONE), Optional.empty(), logicalProperties,
                 groupPlan, groupPlan);
         GroupExpression groupExpression = new GroupExpression(join);
@@ -870,9 +886,12 @@ class ChildOutputPropertyDeriverTest {
                 new ExprId(2), "c2", TinyIntType.INSTANCE, true, ImmutableList.of());
         SlotReference c3 = new SlotReference(
                 new ExprId(3), "c3", TinyIntType.INSTANCE, true, ImmutableList.of());
+        SlotReference c4 = new SlotReference(
+                new ExprId(4), "c4", TinyIntType.INSTANCE, true, ImmutableList.of());
         PhysicalRepeat<GroupPlan> repeat = new PhysicalRepeat<>(
                 ImmutableList.of(ImmutableList.of(c1, c2), ImmutableList.of(c1), ImmutableList.of(c1, c3)),
                 ImmutableList.of(c1, c2, c3),
+                c4,
                 logicalProperties,
                 groupPlan
         );
@@ -893,9 +912,12 @@ class ChildOutputPropertyDeriverTest {
                 new ExprId(2), "c2", TinyIntType.INSTANCE, true, ImmutableList.of());
         SlotReference c3 = new SlotReference(
                 new ExprId(3), "c3", TinyIntType.INSTANCE, true, ImmutableList.of());
+        SlotReference c4 = new SlotReference(
+                new ExprId(4), "c4", TinyIntType.INSTANCE, true, ImmutableList.of());
         PhysicalRepeat<GroupPlan> repeat = new PhysicalRepeat<>(
                 ImmutableList.of(ImmutableList.of(c1, c2), ImmutableList.of(c1), ImmutableList.of(c1, c3)),
                 ImmutableList.of(c1, c2, c3),
+                c4,
                 logicalProperties,
                 groupPlan
         );
@@ -916,9 +938,12 @@ class ChildOutputPropertyDeriverTest {
                 new ExprId(2), "c2", TinyIntType.INSTANCE, true, ImmutableList.of());
         SlotReference c3 = new SlotReference(
                 new ExprId(3), "c3", TinyIntType.INSTANCE, true, ImmutableList.of());
+        SlotReference c4 = new SlotReference(
+                new ExprId(4), "c4", TinyIntType.INSTANCE, true, ImmutableList.of());
         PhysicalRepeat<GroupPlan> repeat = new PhysicalRepeat<>(
                 ImmutableList.of(ImmutableList.of(c1, c2, c3), ImmutableList.of(c1, c2), ImmutableList.of(c1, c2)),
                 ImmutableList.of(c1, c2, c3),
+                c4,
                 logicalProperties,
                 groupPlan
         );

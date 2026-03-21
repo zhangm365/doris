@@ -28,8 +28,8 @@
 #include <utility>
 #include <vector>
 
-#include "vec/common/allocator.h"
-#include "vec/common/allocator_fwd.h"
+#include "core/allocator.h"
+#include "core/allocator_fwd.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -91,7 +91,7 @@ public:
     const char* get_data() const { return data; }
 
     /// @return A mutable pointer to the beginning of the referenced data.
-    char* mutable_data() { return const_cast<char*>(data); }
+    char* mutable_data() { return data; }
 
     /// @return The length (in bytes) of the referenced data.
     size_t get_size() const { return size; }

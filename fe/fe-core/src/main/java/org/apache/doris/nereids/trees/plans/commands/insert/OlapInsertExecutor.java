@@ -135,7 +135,10 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
         try {
             // TODO refactor this to avoid call legacy planner's function
             long timeout = getTimeout();
-            olapTableSink.init(ctx.queryId(), txnId, database.getId(),
+            long dbId = database.getId();
+            // TODO: For Insert Into with S3/HDFS TVF, need to get load_to_single_tablet from TVF properties
+            // Currently hardcoded to false, which bypasses the check in OlapTableSink.init()
+            olapTableSink.init(ctx.queryId(), txnId, dbId,
                     timeout,
                     ctx.getSessionVariable().getSendBatchParallelism(),
                     false,
@@ -192,6 +195,10 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
 
     protected void addTableIndexes(TransactionState state) {
         state.addTableIndexes((OlapTable) table);
+    }
+
+    protected void abortTransactionOnFail() throws Exception {
+        Env.getCurrentGlobalTransactionMgr().abortTransaction(database.getId(), txnId, errMsg);
     }
 
     @Override
@@ -277,8 +284,7 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
         LOG.warn("insert [{}] with query id {} failed", labelName, queryId, t);
         if (txnId != INVALID_TXN_ID) {
             try {
-                Env.getCurrentGlobalTransactionMgr().abortTransaction(
-                        database.getId(), txnId, errMsg);
+                abortTransactionOnFail();
             } catch (Exception abortTxnException) {
                 // just print a log if abort txn failed. This failure do not need to pass to user.
                 // user only concern abort how txn failed.
@@ -290,15 +296,17 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
         if (Config.isCloudMode() && SystemInfoService.needRetryWithReplan(t.getMessage())) {
             return;
         }
-        StringBuilder sb = new StringBuilder(t.getMessage());
+        String firstErrorMsgPart = "";
+        String urlPart = "";
         if (!Strings.isNullOrEmpty(coordinator.getFirstErrorMsg())) {
-            sb.append(". first_error_msg: ").append(
-                    StringUtils.abbreviate(coordinator.getFirstErrorMsg(), Config.first_error_msg_max_length));
+            firstErrorMsgPart = StringUtils.abbreviate(coordinator.getFirstErrorMsg(),
+                    Config.first_error_msg_max_length);
         }
         if (!Strings.isNullOrEmpty(coordinator.getTrackingUrl())) {
-            sb.append(". url: ").append(coordinator.getTrackingUrl());
+            urlPart = coordinator.getTrackingUrl();
         }
-        ctx.getState().setError(ErrorCode.ERR_UNKNOWN_ERROR, sb.toString());
+        String finalErrorMsg = InsertUtils.getFinalErrorMsg(errMsg, firstErrorMsgPart, urlPart);
+        ctx.getState().setError(ErrorCode.ERR_UNKNOWN_ERROR, finalErrorMsg);
     }
 
     @Override

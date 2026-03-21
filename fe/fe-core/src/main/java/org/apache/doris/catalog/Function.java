@@ -17,78 +17,30 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.analysis.Expr;
-import org.apache.doris.analysis.FunctionCallExpr;
-import org.apache.doris.analysis.FunctionName;
-import org.apache.doris.analysis.FunctionParams;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.common.util.URI;
 import org.apache.doris.persist.gson.GsonUtils;
-import org.apache.doris.thrift.TFunction;
 import org.apache.doris.thrift.TFunctionBinaryType;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
 import com.google.gson.annotations.SerializedName;
 import org.apache.commons.io.output.NullOutputStream;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 /**
  * Base class for all functions.
  */
 public class Function implements Writable {
-    private static final Logger LOG = LogManager.getLogger(Function.class);
-
-    // Enum for how to compare function signatures.
-    // For decimal types, the type in the function can be a wildcard, i.e. decimal(*,*).
-    // The wildcard can *only* exist as function type, the caller will always be a
-    // fully specified decimal.
-    // For the purposes of function type resolution, decimal(*,*) will match exactly
-    // with any fully specified decimal (i.e. fn(decimal(*,*)) matches identically for
-    // the call to fn(decimal(1,0)).
-    public enum CompareMode {
-        // Two signatures are identical if the number of arguments and their types match
-        // exactly and either both signatures are varargs or neither.
-        IS_IDENTICAL,
-
-        // Two signatures are indistinguishable if there is no way to tell them apart
-        // when matching a particular instantiation. That is, their fixed arguments
-        // match exactly and the remaining varargs have the same type.
-        // e.g. fn(int, int, int) and fn(int...)
-        // Argument types that are NULL are ignored when doing this comparison.
-        // e.g. fn(NULL, int) is indistinguishable from fn(int, int)
-        IS_INDISTINGUISHABLE,
-
-        // X is a supertype of Y if Y.arg[i] can be strictly implicitly cast to X.arg[i]. If
-        /// X has vargs, the remaining arguments of Y must be strictly implicitly castable
-        // to the var arg type. The key property this provides is that X can be used in place
-        // of Y. e.g. fn(int, double, string...) is a supertype of fn(tinyint, float, string,
-        // string)
-        IS_SUPERTYPE_OF,
-
-        // Nonstrict supertypes broaden the definition of supertype to accept implicit casts
-        // of arguments that may result in loss of precision - e.g. decimal to float.
-        IS_NONSTRICT_SUPERTYPE_OF,
-
-        // Used to drop UDF. User can drop function through name or name and arguments.
-        // If X is matchable with Y, this will only check X's element is identical with Y's.
-        // e.g. fn is matchable with fn(int), fn(float) and fn(int) is only matchable with fn(int).
-        IS_MATCHABLE
-    }
 
     public enum NullableMode {
         // Whether output column is nullable is depend on the input column is nullable
@@ -97,12 +49,9 @@ public class Function implements Writable {
         // depend on input content
         ALWAYS_NULLABLE,
         // like 'count', the output column is always not nullable
-        ALWAYS_NOT_NULLABLE,
-        // Whether output column is nullable is depend on custom algorithm by @Expr.isNullable()
-        CUSTOM
+        ALWAYS_NOT_NULLABLE
     }
 
-    public static final long UNIQUE_FUNCTION_ID = 0;
     // Function id, every function has a unique id. Now all built-in functions' id is 0
     @SerializedName("id")
     private long id = 0;
@@ -132,8 +81,6 @@ public class Function implements Writable {
     @SerializedName("bt")
     private TFunctionBinaryType binaryType;
 
-    private Function nestedFunction = null;
-
     @SerializedName("nm")
     protected NullableMode nullableMode = NullableMode.DEPEND_ON_ARGUMENT;
 
@@ -153,6 +100,10 @@ public class Function implements Writable {
     protected boolean isStaticLoad = false;
     @SerializedName("eT")
     protected long expirationTime = 360; // default 6 hours;
+    @SerializedName("rv")
+    protected String runtimeVersion;
+    @SerializedName("fc")
+    protected String functionCode;
 
     // Only used for serialization
     protected Function() {
@@ -160,10 +111,6 @@ public class Function implements Writable {
 
     public Function(FunctionName name, List<Type> args, Type retType, boolean varArgs) {
         this(0, name, args, retType, varArgs, true, NullableMode.DEPEND_ON_ARGUMENT);
-    }
-
-    public Function(FunctionName name, List<Type> args, Type retType, boolean varArgs, boolean vectorized) {
-        this(0, name, args, retType, varArgs, vectorized, NullableMode.DEPEND_ON_ARGUMENT);
     }
 
     public Function(FunctionName name, List<Type> args, Type retType,
@@ -215,14 +162,8 @@ public class Function implements Writable {
         this.isUDTFunction = other.isUDTFunction;
         this.isStaticLoad = other.isStaticLoad;
         this.expirationTime = other.expirationTime;
-    }
-
-    public void setNestedFunction(Function nestedFunction) {
-        this.nestedFunction = nestedFunction;
-    }
-
-    public Function getNestedFunction() {
-        return nestedFunction;
+        this.runtimeVersion = other.runtimeVersion;
+        this.functionCode = other.functionCode;
     }
 
     public Function clone() {
@@ -322,12 +263,32 @@ public class Function implements Writable {
         return checksum;
     }
 
+    public boolean isVectorized() {
+        return vectorized;
+    }
+
     public boolean isGlobal() {
         return isGlobal;
     }
 
     public void setGlobal(boolean global) {
         isGlobal = global;
+    }
+
+    public String getRuntimeVersion() {
+        return runtimeVersion;
+    }
+
+    public void setRuntimeVersion(String runtimeVersion) {
+        this.runtimeVersion = runtimeVersion;
+    }
+
+    public String getFunctionCode() {
+        return functionCode;
+    }
+
+    public void setFunctionCode(String functionCode) {
+        this.functionCode = functionCode;
     }
 
     // TODO(cmy): Currently we judge whether it is UDF by wheter the 'location' is set.
@@ -367,51 +328,6 @@ public class Function implements Writable {
         return true;
     }
 
-    public TFunction toThrift(Type realReturnType, Type[] realArgTypes, Boolean[] realArgTypeNullables) {
-        TFunction fn = new TFunction();
-        fn.setSignature(signatureString());
-        fn.setName(name.toThrift());
-        fn.setBinaryType(binaryType);
-        if (location != null) {
-            fn.setHdfsLocation(location.getLocation());
-        }
-        // `realArgTypes.length != argTypes.length` is true iff this is an aggregation
-        // function.
-        // For aggregation functions, `argTypes` here is already its real type with true
-        // precision and scale.
-        if (realArgTypes.length != argTypes.length) {
-            fn.setArgTypes(Type.toThrift(Lists.newArrayList(argTypes)));
-        } else {
-            fn.setArgTypes(Type.toThrift(Lists.newArrayList(argTypes), Lists.newArrayList(realArgTypes)));
-        }
-
-        // For types with different precisions and scales, return type only indicates a
-        // type with default
-        // precision and scale so we need to transform it to the correct type.
-        if (realReturnType.typeContainsPrecision() || realReturnType.isAggStateType()) {
-            fn.setRetType(realReturnType.toThrift());
-        } else {
-            fn.setRetType(getReturnType().toThrift());
-        }
-        fn.setHasVarArgs(hasVarArgs);
-        // TODO: Comment field is missing?
-        // fn.setComment(comment)
-        fn.setId(id);
-        if (!checksum.isEmpty()) {
-            fn.setChecksum(checksum);
-        }
-        fn.setVectorized(vectorized);
-        fn.setIsUdtfFunction(isUDTFunction);
-        fn.setIsStaticLoad(isStaticLoad);
-        fn.setExpirationTime(expirationTime);
-        return fn;
-    }
-
-    // Child classes must override this function.
-    public String toSql(boolean ifNotExists) {
-        return "";
-    }
-
     @Override
     public void write(DataOutput output) throws IOException {
         Text.writeString(output, GsonUtils.GSON.toJson(this));
@@ -419,47 +335,6 @@ public class Function implements Writable {
 
     public static Function read(DataInput input) throws IOException {
         return GsonUtils.GSON.fromJson(Text.readString(input), Function.class);
-    }
-
-    public String getProperties() {
-        return "";
-    }
-
-    public List<Comparable> getInfo(boolean isVerbose) {
-        List<Comparable> row = Lists.newArrayList();
-        if (isVerbose) {
-            // signature
-            row.add(signatureString());
-            // return type
-            row.add(getReturnType().getPrimitiveType().toString());
-            // function type
-            // intermediate type
-            if (this instanceof ScalarFunction) {
-                if (isUDTFunction()) {
-                    row.add("TABLES");
-                } else {
-                    row.add("Scalar");
-                }
-                row.add("NULL");
-            } else if (this instanceof AliasFunction) {
-                row.add("Alias");
-                row.add("NULL");
-            } else {
-                row.add("Aggregate");
-                AggregateFunction aggFunc = (AggregateFunction) this;
-                Type intermediateType = aggFunc.getIntermediateType();
-                if (intermediateType != null) {
-                    row.add(intermediateType.getPrimitiveType().toString());
-                } else {
-                    row.add("NULL");
-                }
-            }
-            // property
-            row.add(getProperties());
-        } else {
-            row.add(functionName());
-        }
-        return row;
     }
 
     public void setNullableMode(NullableMode nullableMode) {
@@ -529,55 +404,5 @@ public class Function implements Writable {
                 vectorized, checksum);
         result = 31 * result + Arrays.hashCode(argTypes);
         return result;
-    }
-
-    public static FunctionCallExpr convertToStateCombinator(FunctionCallExpr fnCall, boolean returnNullable) {
-        Function aggFunction = fnCall.getFn();
-        List<Type> arguments = Arrays.asList(aggFunction.getArgs());
-        ScalarFunction fn = new ScalarFunction(
-                new FunctionName(aggFunction.getFunctionName().getFunction() + Expr.AGG_STATE_SUFFIX), arguments,
-                Expr.createAggStateType(aggFunction.getFunctionName().getFunction(),
-                        fnCall.getChildren().stream().map(expr -> {
-                            return expr.getType();
-                        }).collect(Collectors.toList()), fnCall.getChildren().stream().map(expr -> {
-                            return expr.isNullable();
-                        }).collect(Collectors.toList()), returnNullable),
-                aggFunction.hasVarArgs(), aggFunction.isUserVisible());
-        fn.setNullableMode(NullableMode.ALWAYS_NOT_NULLABLE);
-        fn.setBinaryType(TFunctionBinaryType.AGG_STATE);
-        return new FunctionCallExpr(fn, new FunctionParams(fnCall.getChildren()));
-    }
-
-    public static FunctionCallExpr convertToMergeCombinator(FunctionCallExpr fnCall) {
-        Function aggFunction = fnCall.getFn();
-        aggFunction.setName(new FunctionName(aggFunction.getFunctionName().getFunction() + Expr.AGG_MERGE_SUFFIX));
-        aggFunction.setArgs(Arrays.asList(fnCall.getChildren().get(0).getType()));
-        aggFunction.setBinaryType(TFunctionBinaryType.AGG_STATE);
-        return fnCall;
-    }
-
-    public static FunctionCallExpr convertToUnionCombinator(FunctionCallExpr fnCall) {
-        Function aggFunction = fnCall.getFn();
-        aggFunction.setName(new FunctionName(aggFunction.getFunctionName().getFunction() + Expr.AGG_UNION_SUFFIX));
-        aggFunction.setArgs(Arrays.asList(fnCall.getChildren().get(0).getType()));
-        aggFunction.setBinaryType(TFunctionBinaryType.AGG_STATE);
-        aggFunction.setNullableMode(NullableMode.ALWAYS_NOT_NULLABLE);
-        aggFunction.setReturnType(fnCall.getChildren().get(0).getType());
-        fnCall.setType(fnCall.getChildren().get(0).getType());
-        return fnCall;
-    }
-
-    public static FunctionCallExpr convertForEachCombinator(FunctionCallExpr fnCall) {
-        Function aggFunction = fnCall.getFn();
-        aggFunction.setName(new FunctionName(aggFunction.getFunctionName().getFunction()
-                + Expr.AGG_FOREACH_SUFFIX + "v2"));
-        List<Type> argTypes = new ArrayList();
-        for (Type type : aggFunction.argTypes) {
-            argTypes.add(new ArrayType(type));
-        }
-        aggFunction.setArgs(argTypes);
-        aggFunction.setReturnType(new ArrayType(aggFunction.getReturnType(), true));
-        aggFunction.setNullableMode(NullableMode.ALWAYS_NULLABLE);
-        return fnCall;
     }
 }

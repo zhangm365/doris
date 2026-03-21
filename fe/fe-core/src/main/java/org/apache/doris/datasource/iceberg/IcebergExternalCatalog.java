@@ -17,30 +17,50 @@
 
 package org.apache.doris.datasource.iceberg;
 
+import org.apache.doris.catalog.Env;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ThreadPoolManager;
+import org.apache.doris.common.UserException;
 import org.apache.doris.datasource.ExternalCatalog;
+import org.apache.doris.datasource.ExternalObjectLog;
 import org.apache.doris.datasource.InitCatalogLog;
 import org.apache.doris.datasource.SessionContext;
+import org.apache.doris.datasource.metacache.CacheSpec;
 import org.apache.doris.datasource.operations.ExternalMetadataOperations;
 import org.apache.doris.datasource.property.metastore.AbstractIcebergProperties;
+import org.apache.doris.nereids.trees.plans.commands.info.AddPartitionFieldOp;
+import org.apache.doris.nereids.trees.plans.commands.info.DropPartitionFieldOp;
+import org.apache.doris.nereids.trees.plans.commands.info.ReplacePartitionFieldOp;
 import org.apache.doris.transaction.TransactionManagerFactory;
 
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public abstract class IcebergExternalCatalog extends ExternalCatalog {
 
+    private static final Logger LOG = LogManager.getLogger(IcebergExternalCatalog.class);
     public static final String ICEBERG_CATALOG_TYPE = "iceberg.catalog.type";
     public static final String ICEBERG_REST = "rest";
     public static final String ICEBERG_HMS = "hms";
     public static final String ICEBERG_HADOOP = "hadoop";
     public static final String ICEBERG_GLUE = "glue";
     public static final String ICEBERG_DLF = "dlf";
+    public static final String ICEBERG_JDBC = "jdbc";
     public static final String ICEBERG_S3_TABLES = "s3tables";
     public static final String EXTERNAL_CATALOG_NAME = "external_catalog.name";
+    public static final String ICEBERG_TABLE_CACHE_ENABLE = "meta.cache.iceberg.table.enable";
+    public static final String ICEBERG_TABLE_CACHE_TTL_SECOND = "meta.cache.iceberg.table.ttl-second";
+    public static final String ICEBERG_TABLE_CACHE_CAPACITY = "meta.cache.iceberg.table.capacity";
+    public static final String ICEBERG_MANIFEST_CACHE_ENABLE = "meta.cache.iceberg.manifest.enable";
+    public static final String ICEBERG_MANIFEST_CACHE_TTL_SECOND = "meta.cache.iceberg.manifest.ttl-second";
+    public static final String ICEBERG_MANIFEST_CACHE_CAPACITY = "meta.cache.iceberg.manifest.capacity";
+    public static final boolean DEFAULT_ICEBERG_MANIFEST_CACHE_ENABLE = false;
+    public static final long DEFAULT_ICEBERG_MANIFEST_CACHE_CAPACITY = 1024;
+    public static final long DEFAULT_ICEBERG_MANIFEST_CACHE_TTL_SECOND = 48 * 60 * 60;
     protected String icebergCatalogType;
     protected Catalog catalog;
 
@@ -54,9 +74,7 @@ public abstract class IcebergExternalCatalog extends ExternalCatalog {
     protected void initCatalog() {
         try {
             msProperties = (AbstractIcebergProperties) catalogProperty.getMetastoreProperties();
-            this.catalog = msProperties.initializeCatalog(getName(), new ArrayList<>(catalogProperty
-                    .getStoragePropertiesMap().values()));
-
+            this.catalog = msProperties.initializeCatalog(getName(), catalogProperty.getOrderedStoragePropertiesList());
             this.icebergCatalogType = msProperties.getIcebergCatalogType();
         } catch (ClassCastException e) {
             throw new RuntimeException("Invalid properties for Iceberg catalog: " + getProperties(), e);
@@ -68,7 +86,30 @@ public abstract class IcebergExternalCatalog extends ExternalCatalog {
     @Override
     public void checkProperties() throws DdlException {
         super.checkProperties();
+        CacheSpec.checkBooleanProperty(catalogProperty.getOrDefault(ICEBERG_TABLE_CACHE_ENABLE, null),
+                ICEBERG_TABLE_CACHE_ENABLE);
+        CacheSpec.checkLongProperty(catalogProperty.getOrDefault(ICEBERG_TABLE_CACHE_TTL_SECOND, null),
+                -1L, ICEBERG_TABLE_CACHE_TTL_SECOND);
+        CacheSpec.checkLongProperty(catalogProperty.getOrDefault(ICEBERG_TABLE_CACHE_CAPACITY, null),
+                0L, ICEBERG_TABLE_CACHE_CAPACITY);
+
+        CacheSpec.checkBooleanProperty(catalogProperty.getOrDefault(ICEBERG_MANIFEST_CACHE_ENABLE, null),
+                ICEBERG_MANIFEST_CACHE_ENABLE);
+        CacheSpec.checkLongProperty(catalogProperty.getOrDefault(ICEBERG_MANIFEST_CACHE_TTL_SECOND, null),
+                -1L, ICEBERG_MANIFEST_CACHE_TTL_SECOND);
+        CacheSpec.checkLongProperty(catalogProperty.getOrDefault(ICEBERG_MANIFEST_CACHE_CAPACITY, null),
+                0L, ICEBERG_MANIFEST_CACHE_CAPACITY);
         catalogProperty.checkMetaStoreAndStorageProperties(AbstractIcebergProperties.class);
+    }
+
+    @Override
+    public void notifyPropertiesUpdated(Map<String, String> updatedProps) {
+        super.notifyPropertiesUpdated(updatedProps);
+        if (updatedProps.keySet().stream()
+                .anyMatch(key -> CacheSpec.isMetaCacheKeyForEngine(key, IcebergExternalMetaCache.ENGINE))) {
+            Env.getCurrentEnv().getExtMetaCacheMgr()
+                    .removeCatalogByEngine(getId(), IcebergExternalMetaCache.ENGINE);
+        }
     }
 
     @Override
@@ -122,8 +163,7 @@ public abstract class IcebergExternalCatalog extends ExternalCatalog {
     }
 
     @Override
-    public List<String> listTableNames(SessionContext ctx, String dbName) {
-        makeSureInitialized();
+    protected List<String> listTableNamesFromRemote(SessionContext ctx, String dbName) {
         // On the Doris side, the result of SHOW TABLES for Iceberg external tables includes both tables and views,
         // so the combined set of tables and views is used here.
         List<String> tableNames = metadataOps.listTableNames(dbName);
@@ -136,12 +176,67 @@ public abstract class IcebergExternalCatalog extends ExternalCatalog {
     public void onClose() {
         super.onClose();
         if (null != catalog) {
-            catalog = null;
+            try {
+                if (catalog instanceof AutoCloseable) {
+                    ((AutoCloseable) catalog).close();
+                }
+                catalog = null;
+            } catch (Exception e) {
+                LOG.warn("Failed to close iceberg catalog: {}", getName(), e);
+            }
         }
     }
 
     @Override
     public boolean viewExists(String dbName, String viewName) {
         return metadataOps.viewExists(dbName, viewName);
+    }
+
+    /**
+     * Add partition field to Iceberg table for partition evolution
+     */
+    public void addPartitionField(IcebergExternalTable table, AddPartitionFieldOp op, long updateTime)
+            throws UserException {
+        makeSureInitialized();
+        if (metadataOps == null) {
+            throw new UserException("Add partition field operation is not supported for catalog: " + getName());
+        }
+        ((IcebergMetadataOps) metadataOps).addPartitionField(table, op, updateTime);
+        Env.getCurrentEnv().getEditLog()
+                .logRefreshExternalTable(
+                        ExternalObjectLog.createForRefreshTable(table.getCatalog().getId(),
+                                table.getDbName(), table.getName(), updateTime));
+    }
+
+    /**
+     * Drop partition field from Iceberg table for partition evolution
+     */
+    public void dropPartitionField(IcebergExternalTable table, DropPartitionFieldOp op, long updateTime)
+            throws UserException {
+        makeSureInitialized();
+        if (metadataOps == null) {
+            throw new UserException("Drop partition field operation is not supported for catalog: " + getName());
+        }
+        ((IcebergMetadataOps) metadataOps).dropPartitionField(table, op, updateTime);
+        Env.getCurrentEnv().getEditLog()
+                .logRefreshExternalTable(
+                        ExternalObjectLog.createForRefreshTable(table.getCatalog().getId(),
+                                table.getDbName(), table.getName(), updateTime));
+    }
+
+    /**
+     * Replace partition field in Iceberg table for partition evolution
+     */
+    public void replacePartitionField(IcebergExternalTable table,
+            ReplacePartitionFieldOp op, long updateTime) throws UserException {
+        makeSureInitialized();
+        if (metadataOps == null) {
+            throw new UserException("Replace partition field operation is not supported for catalog: " + getName());
+        }
+        ((IcebergMetadataOps) metadataOps).replacePartitionField(table, op, updateTime);
+        Env.getCurrentEnv().getEditLog()
+                .logRefreshExternalTable(
+                        ExternalObjectLog.createForRefreshTable(table.getCatalog().getId(),
+                                table.getDbName(), table.getName(), updateTime));
     }
 }

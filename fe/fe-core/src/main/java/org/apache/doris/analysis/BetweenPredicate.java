@@ -20,10 +20,6 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
-import org.apache.doris.thrift.TExprNode;
-
 import com.google.gson.annotations.SerializedName;
 
 /**
@@ -40,17 +36,13 @@ public class BetweenPredicate extends Predicate {
         // use for serde only
     }
 
-    // First child is the comparison expr which should be in [lowerBound, upperBound].
-    public BetweenPredicate(Expr compareExpr, Expr lowerBound, Expr upperBound, boolean isNotBetween) {
-        children.add(compareExpr);
-        children.add(lowerBound);
-        children.add(upperBound);
-        this.isNotBetween = isNotBetween;
-    }
-
     protected BetweenPredicate(BetweenPredicate other) {
         super(other);
         isNotBetween = other.isNotBetween;
+    }
+
+    public boolean isNotBetween() {
+        return isNotBetween;
     }
 
     @Override
@@ -59,25 +51,8 @@ public class BetweenPredicate extends Predicate {
     }
 
     @Override
-    protected void toThrift(TExprNode msg) {
-        throw new IllegalStateException(
-                "BetweenPredicate needs to be rewritten into a CompoundPredicate.");
-    }
-
-    @Override
-    public String toSqlImpl() {
-        String notStr = (isNotBetween) ? "NOT " : "";
-        return children.get(0).toSql() + " " + notStr + "BETWEEN "
-                + children.get(1).toSql() + " AND " + children.get(2).toSql();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        String notStr = (isNotBetween) ? "NOT " : "";
-        return children.get(0).toSql(disableTableName, needExternalSql, tableType, table) + " " + notStr + "BETWEEN "
-                + children.get(1).toSql(disableTableName, needExternalSql, tableType, table) + " AND " + children.get(2)
-                .toSql(disableTableName, needExternalSql, tableType, table);
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitBetweenPredicate(this, context);
     }
 
     @Override
@@ -87,12 +62,6 @@ public class BetweenPredicate extends Predicate {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
         if (!super.equals(o)) {
             return false;
         }

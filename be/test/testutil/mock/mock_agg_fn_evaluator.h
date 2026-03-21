@@ -16,9 +16,9 @@
 // under the License.
 
 #include "common/object_pool.h"
-#include "vec/exprs/vectorized_agg_fn.h"
+#include "exprs/vectorized_agg_fn.h"
 
-namespace doris::vectorized {
+namespace doris {
 
 AggFnEvaluator* create_mock_agg_fn_evaluator(ObjectPool& pool, bool is_merge = false,
                                              bool without_key = false);
@@ -27,8 +27,8 @@ AggFnEvaluator* create_mock_agg_fn_evaluator(ObjectPool& pool, VExprContextSPtrs
                                              bool is_merge = false, bool without_key = false);
 
 AggFnEvaluator* create_agg_fn(ObjectPool& pool, const std::string& agg_fn_name,
-                              const DataTypes& args_types, bool result_nullable,
-                              bool is_window_function = false);
+                              const DataTypes& args_types, DataTypePtr result_type,
+                              bool result_nullable, bool is_window_function = false);
 
 class MockAggFnEvaluator : public AggFnEvaluator {
 public:
@@ -36,4 +36,4 @@ public:
             : AggFnEvaluator(is_merge, without_key, is_window_function) {}
 };
 
-} // namespace doris::vectorized
+} // namespace doris

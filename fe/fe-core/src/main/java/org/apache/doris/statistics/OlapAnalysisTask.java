@@ -193,7 +193,10 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
             for (int i = 0; i < tabletCounts; i++) {
                 int seekTid = (int) ((i + seek) % ids.size());
                 long tabletId = ids.get(seekTid);
-                long tabletRows = materializedIndex.getTablet(tabletId).getMinReplicaRowCount(p.getVisibleVersion());
+                // for local mode, getCachedVisibleVersion return visibleVersion.
+                // for cloud mode, the replica.checkVersionCatchUp always returns true.
+                long tabletRows = materializedIndex.getTablet(tabletId)
+                        .getMinReplicaRowCount(p.getCachedVisibleVersion());
                 if (tabletRows > MAXIMUM_SAMPLE_ROWS) {
                     LOG.debug("Found one large tablet id {} in table {}, rows {}",
                             largeTabletId, tbl.getName(), largeTabletRows);
@@ -271,6 +274,8 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
             params.put("scaleFactor", "1");
             params.put("sampleHints", "");
             params.put("ndvFunction", "ROUND(NDV(`${colName}`) * ${scaleFactor})");
+            // For full table scan, use COUNT(1) for table row count.
+            params.put("rowCount", "COUNT(1)");
             params.put("rowCount2", "(SELECT COUNT(1) FROM cte1 WHERE `${colName}` IS NOT NULL)");
             scanFullTable = true;
             return;

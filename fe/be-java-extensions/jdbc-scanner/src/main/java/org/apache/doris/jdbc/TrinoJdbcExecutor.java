@@ -35,6 +35,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * @deprecated Use {@link TrinoTypeHandler} instead.
+ */
+@Deprecated
 public class TrinoJdbcExecutor extends BaseJdbcExecutor {
     public TrinoJdbcExecutor(byte[] thriftParams) throws Exception {
         super(thriftParams);
@@ -98,6 +102,8 @@ public class TrinoJdbcExecutor extends BaseJdbcExecutor {
                 }
                 return Arrays.asList(dataArray);
             }
+            case VARBINARY:
+                return resultSet.getObject(columnIndex + 1, byte[].class);
             default:
                 throw new IllegalArgumentException("Unsupported column type: " + type.getType());
         }

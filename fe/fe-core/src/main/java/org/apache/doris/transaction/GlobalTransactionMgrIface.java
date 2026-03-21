@@ -210,7 +210,8 @@ public interface GlobalTransactionMgrIface extends Writable {
 
     public void replayBatchRemoveTransactionV2(BatchRemoveTransactionsOperationV2 operation) throws Exception;
 
-    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse);
+    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<TabletCommitInfo> tabletCommitInfos,
+            List<Long> tabletIds);
 
     public void addSubTransaction(long dbId, long transactionId, long subTransactionId);
 
@@ -220,4 +221,6 @@ public interface GlobalTransactionMgrIface extends Writable {
                 long dbId, List<Long> tableIdList) throws UserException;
 
     public int getQueueLength();
+
+    public AutoPartitionCacheManager getAutoPartitionCacheMgr();
 }

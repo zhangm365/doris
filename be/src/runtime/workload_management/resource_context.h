@@ -23,12 +23,12 @@
 
 #include "common/factory_creator.h"
 #include "common/multi_version.h"
+#include "runtime/runtime_profile.h"
 #include "runtime/workload_group/workload_group.h"
 #include "runtime/workload_management/cpu_context.h"
 #include "runtime/workload_management/io_context.h"
 #include "runtime/workload_management/memory_context.h"
 #include "runtime/workload_management/task_controller.h"
-#include "util/runtime_profile.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -79,8 +79,6 @@ public:
         task_controller_->set_resource_ctx(this);
     }
     void set_workload_group(WorkloadGroupPtr wg) { _workload_group = wg; }
-
-    RuntimeProfile* profile() { return const_cast<RuntimeProfile*>(resource_profile_.get().get()); }
 
     void to_thrift_query_statistics(TQueryStatistics* statistics) const;
 

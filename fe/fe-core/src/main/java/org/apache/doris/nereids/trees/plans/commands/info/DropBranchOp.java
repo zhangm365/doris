@@ -18,8 +18,7 @@
 package org.apache.doris.nereids.trees.plans.commands.info;
 
 import org.apache.doris.alter.AlterOpType;
-import org.apache.doris.analysis.AlterTableClause;
-import org.apache.doris.analysis.DropBranchClause;
+import org.apache.doris.catalog.info.DropBranchInfo;
 
 import java.util.Map;
 
@@ -57,8 +56,7 @@ public class DropBranchOp extends AlterTableOp {
         return null;
     }
 
-    @Override
-    public AlterTableClause translateToLegacyAlterClause() {
-        return new DropBranchClause(dropBranchInfo);
+    public DropBranchInfo getDropBranchInfo() {
+        return dropBranchInfo;
     }
 }

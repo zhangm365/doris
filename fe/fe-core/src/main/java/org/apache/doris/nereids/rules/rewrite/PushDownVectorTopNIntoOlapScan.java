@@ -17,10 +17,10 @@
 
 package org.apache.doris.nereids.rules.rewrite;
 
-import org.apache.doris.analysis.IndexDef.IndexType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Index;
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.catalog.info.IndexType;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.trees.expressions.Alias;
@@ -146,10 +146,10 @@ public class PushDownVectorTopNIntoOlapScan implements RewriteRuleFactory {
             return null;
         }
 
-        Plan plan = scan.withVirtualColumnsAndTopN(
+        Plan plan = scan.appendVirtualColumnsAndTopN(
                 ImmutableList.of(orderKeyAlias),
                 topN.getOrderKeys(), Optional.of(topN.getLimit() + topN.getOffset()),
-                ImmutableList.of(), Optional.empty());
+                ImmutableList.of(), Optional.empty(), Optional.empty());
 
         Map<Expression, Expression> replaceMap = Maps.newHashMap();
         replaceMap.put(orderKeyAlias, orderKeyAlias.toSlot());

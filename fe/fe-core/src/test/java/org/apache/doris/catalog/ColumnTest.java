@@ -22,6 +22,7 @@ import org.apache.doris.analysis.Expr;
 import org.apache.doris.analysis.SlotDescriptor;
 import org.apache.doris.analysis.SlotId;
 import org.apache.doris.analysis.SlotRef;
+import org.apache.doris.catalog.Function.NullableMode;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.io.Text;
@@ -150,10 +151,17 @@ public class ColumnTest {
         Assert.fail("No exception throws.");
     }
 
-    @Test(expected = DdlException.class)
+    @Test
     public void testSchemaChangeArrayToArray() throws DdlException {
         Column oldColumn = new Column("a", ArrayType.create(Type.TINYINT, true), false, null, true, "0", "");
         Column newColumn = new Column("a", ArrayType.create(Type.INT, true), false, null, true, "0", "");
+        oldColumn.checkSchemaChangeAllowed(newColumn);
+    }
+
+    @Test(expected = DdlException.class)
+    public void testSchemaChangeArrayToArrayDowngrade() throws DdlException {
+        Column oldColumn = new Column("a", ArrayType.create(Type.INT, true), false, null, true, "0", "");
+        Column newColumn = new Column("a", ArrayType.create(Type.TINYINT, true), false, null, true, "0", "");
         oldColumn.checkSchemaChangeAllowed(newColumn);
         Assert.fail("No exception throws.");
     }
@@ -167,7 +175,7 @@ public class ColumnTest {
         Column mvColumnSimple = new Column("mv_a", ArrayType.create(Type.INT, true), false, null, true, "0", "");
         mvColumnSimple.setDefineExpr(baseSlot);
         Assert.assertTrue(mvColumnSimple.tryGetBaseColumnName().equalsIgnoreCase("base_a"));
-        Expr add = new ArithmeticExpr(ArithmeticExpr.Operator.ADD, baseSlot, baseSlot);
+        Expr add = new ArithmeticExpr(ArithmeticExpr.Operator.ADD, baseSlot, baseSlot, ScalarType.BOOLEAN, NullableMode.DEPEND_ON_ARGUMENT, true);
         Column mvColumnComplex = new Column("mv_b", ArrayType.create(Type.INT, true), false, null, true, "0", "");
         mvColumnComplex.setDefineExpr(add);
         Assert.assertTrue(mvColumnComplex.tryGetBaseColumnName().equalsIgnoreCase("mv_b"));

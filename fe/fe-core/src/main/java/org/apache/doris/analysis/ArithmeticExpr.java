@@ -22,14 +22,9 @@ package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.Function;
 import org.apache.doris.catalog.Function.NullableMode;
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
+import org.apache.doris.catalog.FunctionName;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TExprOpcode;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.gson.annotations.SerializedName;
 
@@ -39,25 +34,23 @@ import java.util.Objects;
 public class ArithmeticExpr extends Expr {
 
     public enum Operator {
-        MULTIPLY("*", "multiply", TExprOpcode.MULTIPLY),
-        DIVIDE("/", "divide", TExprOpcode.DIVIDE),
-        MOD("%", "mod", TExprOpcode.MOD),
-        INT_DIVIDE("DIV", "int_divide", TExprOpcode.INT_DIVIDE),
-        ADD("+", "add", TExprOpcode.ADD),
-        SUBTRACT("-", "subtract", TExprOpcode.SUBTRACT),
-        BITAND("&", "bitand", TExprOpcode.BITAND),
-        BITOR("|", "bitor", TExprOpcode.BITOR),
-        BITXOR("^", "bitxor", TExprOpcode.BITXOR),
-        BITNOT("~", "bitnot", TExprOpcode.BITNOT);
+        MULTIPLY("*", "multiply"),
+        DIVIDE("/", "divide"),
+        MOD("%", "mod"),
+        INT_DIVIDE("DIV", "int_divide"),
+        ADD("+", "add"),
+        SUBTRACT("-", "subtract"),
+        BITAND("&", "bitand"),
+        BITOR("|", "bitor"),
+        BITXOR("^", "bitxor"),
+        BITNOT("~", "bitnot");
 
         private final String description;
         private final String name;
-        private final TExprOpcode opcode;
 
-        Operator(String description, String name, TExprOpcode opcode) {
+        Operator(String description, String name) {
             this.description = description;
             this.name = name;
-            this.opcode = opcode;
         }
 
         @Override
@@ -68,32 +61,25 @@ public class ArithmeticExpr extends Expr {
         public String getName() {
             return name;
         }
-
-        public TExprOpcode getOpcode() {
-            return opcode;
-        }
     }
 
     @SerializedName("op")
-    private final Operator op;
+    final Operator op;
 
-    public ArithmeticExpr(Operator op, Expr e1, Expr e2) {
-        super();
-        this.op = op;
-        Preconditions.checkNotNull(e1);
-        children.add(e1);
-        Preconditions.checkArgument(
-                op == Operator.BITNOT && e2 == null || op != Operator.BITNOT && e2 != null);
-        if (e2 != null) {
-            children.add(e2);
-        }
+    public Operator getOp() {
+        return op;
     }
 
     /**
      * constructor only used for Nereids.
      */
-    public ArithmeticExpr(Operator op, Expr e1, Expr e2, Type returnType, NullableMode nullableMode) {
-        this(op, e1, e2);
+    public ArithmeticExpr(Operator op, Expr e1, Expr e2, Type returnType, NullableMode nullableMode, boolean nullable) {
+        super();
+        this.op = op;
+        children.add(e1);
+        if (e2 != null) {
+            children.add(e2);
+        }
         List<Type> argTypes;
         if (e2 == null) {
             argTypes = Lists.newArrayList(e1.getType());
@@ -102,6 +88,7 @@ public class ArithmeticExpr extends Expr {
         }
         fn = new Function(new FunctionName(op.getName()), argTypes, returnType, false, true, nullableMode);
         type = returnType;
+        this.nullable = nullable;
     }
 
     /**
@@ -114,7 +101,13 @@ public class ArithmeticExpr extends Expr {
 
     @Override
     public String toString() {
-        return toSql();
+        if (children.size() == 1) {
+            return op.toString() + " " + getChild(0).accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE);
+        } else {
+            return "(" + getChild(0).accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE)
+                    + " " + op.toString()
+                    + " " + getChild(1).accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE) + ")";
+        }
     }
 
     @Override
@@ -123,31 +116,8 @@ public class ArithmeticExpr extends Expr {
     }
 
     @Override
-    public String toSqlImpl() {
-        if (children.size() == 1) {
-            return op.toString() + " " + getChild(0).toSql();
-        } else {
-            return "(" + getChild(0).toSql() + " " + op.toString() + " " + getChild(1).toSql() + ")";
-        }
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        if (children.size() == 1) {
-            return op.toString() + " " + getChild(0).toSql(disableTableName, needExternalSql, tableType, table);
-        } else {
-            return "(" + getChild(0).toSql(disableTableName, needExternalSql, tableType, table) + " " + op.toString()
-                    + " " + getChild(1).toSql(disableTableName, needExternalSql, tableType, table) + ")";
-        }
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.ARITHMETIC_EXPR;
-        if (!(type.isDecimalV2() || type.isDecimalV3())) {
-            msg.setOpcode(op.getOpcode());
-        }
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitArithmeticExpr(this, context);
     }
 
     @Override
@@ -155,7 +125,7 @@ public class ArithmeticExpr extends Expr {
         if (!super.equals(obj)) {
             return false;
         }
-        return ((ArithmeticExpr) obj).opcode == opcode;
+        return ((ArithmeticExpr) obj).op == op;
     }
 
     @Override

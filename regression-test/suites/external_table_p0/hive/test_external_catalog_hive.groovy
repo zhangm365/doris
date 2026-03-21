@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_external_catalog_hive", "p0,external,hive,external_docker,external_docker_hive") {
+suite("test_external_catalog_hive", "p0,external") {
     String enabled = context.config.otherConfigs.get("enableHiveTest")
     if (enabled == null || !enabled.equalsIgnoreCase("true")) {
         logger.info("diable Hive test.")
@@ -200,7 +200,16 @@ suite("test_external_catalog_hive", "p0,external,hive,external_docker,external_d
         }
 
         // test catalog_meta_cache_statistics
-        sql """select * from internal.information_schema.catalog_meta_cache_statistics;"""
-        sql """select * from ${catalog_name}.information_schema.catalog_meta_cache_statistics where catalog_name="${catalog_name}";"""
+        sql """
+            select catalog_name, engine_name, entry_name, request_count, hit_count, miss_count, load_failure_count
+            from internal.information_schema.catalog_meta_cache_statistics
+            order by catalog_name, engine_name, entry_name;
+        """
+        sql """
+            select catalog_name, engine_name, entry_name, request_count, hit_count, miss_count, load_failure_count
+            from ${catalog_name}.information_schema.catalog_meta_cache_statistics
+            where catalog_name="${catalog_name}"
+            order by catalog_name, engine_name, entry_name;
+        """
     }
 }

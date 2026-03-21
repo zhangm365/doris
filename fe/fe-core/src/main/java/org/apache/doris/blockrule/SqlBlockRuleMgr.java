@@ -32,6 +32,7 @@ import org.apache.doris.nereids.trees.plans.commands.CreateSqlBlockRuleCommand;
 import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.qe.ConnectContext;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.gson.annotations.SerializedName;
@@ -44,6 +45,7 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -57,7 +59,7 @@ public class SqlBlockRuleMgr implements Writable {
     private ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
 
     @SerializedName(value = "nameToSqlBlockRuleMap")
-    private Map<String, SqlBlockRule> nameToSqlBlockRuleMap = Maps.newConcurrentMap();
+    private ConcurrentMap<String, SqlBlockRule> nameToSqlBlockRuleMap = Maps.newConcurrentMap();
 
     private void writeLock() {
         lock.writeLock().lock();
@@ -214,6 +216,9 @@ public class SqlBlockRuleMgr implements Writable {
      * Match SQL according to rules.
      **/
     public void matchSql(String originSql, String sqlHash, String user) throws AnalysisException {
+        if (originSql == null) {
+            return;
+        }
         if (Config.sql_block_rule_ignore_admin && (Auth.ROOT_USER.equals(user) || Auth.ADMIN_USER.equals(user))) {
             return;
         }
@@ -309,6 +314,11 @@ public class SqlBlockRuleMgr implements Writable {
                 }
             }
         }
+    }
+
+    @VisibleForTesting
+    public Map<String, SqlBlockRule> getNameToSqlBlockRuleMap() {
+        return nameToSqlBlockRuleMap;
     }
 
     @Override

@@ -44,6 +44,7 @@ import org.apache.doris.nereids.types.DateV2Type;
 import org.apache.doris.nereids.types.DecimalV3Type;
 import org.apache.doris.nereids.types.StringType;
 import org.apache.doris.nereids.types.TimeV2Type;
+import org.apache.doris.nereids.util.DateTimeFormatterUtils;
 import org.apache.doris.nereids.util.DateUtils;
 import org.apache.doris.qe.ConnectContext;
 
@@ -102,6 +103,9 @@ public class DateTimeExtractAndTransform {
         DAY_OF_WEEK.put("SUNDAY", 7);
     }
 
+    // Maximum valid timestamp value (UTC 9999-12-31 23:59:59 - 24 * 3600 for all timezones)
+    private static final long TIMESTAMP_VALID_MAX = 32536771199L;
+
     /**
      * datetime arithmetic function date-v2
      */
@@ -122,6 +126,21 @@ public class DateTimeExtractAndTransform {
     public static Expression year(DateTimeV2Literal date) {
         return new SmallIntLiteral(((short) date.getYear()));
     }
+
+
+    /**
+     * Executable datetime extract century
+     */
+    @ExecFunction(name = "century")
+    public static Expression century(DateV2Literal date) {
+        return new SmallIntLiteral((short) ((date.getYear() - 1) / 100 + 1));
+    }
+
+    @ExecFunction(name = "century")
+    public static Expression century(DateTimeV2Literal date) {
+        return new SmallIntLiteral((short) ((date.getYear() - 1) / 100 + 1));
+    }
+
 
     /**
      * Executable datetime extract quarter
@@ -187,11 +206,27 @@ public class DateTimeExtractAndTransform {
     }
 
     /**
+     * Executable time extract second
+     */
+    @ExecFunction(name = "second")
+    public static Expression second(TimeV2Literal time) {
+        return new TinyIntLiteral(((byte) time.getSecond()));
+    }
+
+    /**
      * Executable datetime extract microsecond
      */
     @ExecFunction(name = "microsecond")
     public static Expression microsecond(DateTimeV2Literal date) {
         return new IntegerLiteral(((int) date.getMicroSecond()));
+    }
+
+    /**
+     * Executable time extract microsecond
+     */
+    @ExecFunction(name = "microsecond")
+    public static Expression microsecond(TimeV2Literal time) {
+        return new IntegerLiteral(((int) time.getMicroSecond()));
     }
 
     /**
@@ -245,31 +280,120 @@ public class DateTimeExtractAndTransform {
      * datetime arithmetic function date-format
      */
     @ExecFunction(name = "date_format")
-    public static Expression dateFormat(DateV2Literal date, StringLikeLiteral format) {
-        if (StringUtils.trim(format.getValue()).length() > 128) {
-            throw new AnalysisException("The length of format string in date_format() function should not be greater"
-                    + " than 128.");
-        }
-        DateTimeV2Literal datetime = new DateTimeV2Literal(date.getYear(), date.getMonth(), date.getDay(), 0, 0, 0, 0);
-        format = (StringLikeLiteral) SupportJavaDateFormatter.translateJavaFormatter(format);
-        return new VarcharLiteral(DateUtils.dateTimeFormatterChecklength(format.getValue(), datetime).format(
-                java.time.LocalDate.of(((int) date.getYear()), ((int) date.getMonth()), ((int) date.getDay()))));
-    }
-
-    /**
-     * datetime arithmetic function date-format
-     */
-    @ExecFunction(name = "date_format")
     public static Expression dateFormat(DateTimeV2Literal date, StringLikeLiteral format) {
         if (StringUtils.trim(format.getValue()).length() > 128) {
             throw new AnalysisException("The length of format string in date_format() function should not be greater"
                     + " than 128.");
         }
         format = (StringLikeLiteral) SupportJavaDateFormatter.translateJavaFormatter(format);
-        return new VarcharLiteral(DateUtils.dateTimeFormatterChecklength(format.getValue(), date).format(
-                java.time.LocalDateTime.of(((int) date.getYear()), ((int) date.getMonth()), ((int) date.getDay()),
-                        ((int) date.getHour()), ((int) date.getMinute()), ((int) date.getSecond()),
-                        ((int) date.getMicroSecond() * 1000))));
+        return new VarcharLiteral(DateTimeFormatterUtils.toFormatStringConservative(date, format, false));
+    }
+
+    /**
+     * time_format constant folding for time literal.
+     */
+    @ExecFunction(name = "time_format")
+    public static Expression timeFormat(TimeV2Literal time, StringLikeLiteral format) {
+        if (StringUtils.trim(format.getValue()).length() > 128) {
+            throw new AnalysisException("The length of format string in time_format() function should not be greater"
+                    + " than 128.");
+        }
+        return new VarcharLiteral(DateTimeFormatterUtils.toFormatStringConservative(time, format));
+    }
+
+    /**
+     * time_format constant folding for datetimev2 literal.
+     */
+    @ExecFunction(name = "time_format")
+    public static Expression timeFormat(DateTimeV2Literal dateTime, StringLikeLiteral format) {
+        if (StringUtils.trim(format.getValue()).length() > 128) {
+            throw new AnalysisException("The length of format string in time_format() function should not be greater"
+                    + " than 128.");
+        }
+        return new VarcharLiteral(DateTimeFormatterUtils.toFormatStringConservative(dateTime, format, true));
+    }
+
+    private static String padTwo(int value) {
+        return value < 10 ? "0" + value : Integer.toString(value);
+    }
+
+    private static String padMicro(int micro) {
+        String s = Integer.toString(micro);
+        int len = s.length();
+        return len >= 6 ? s : "000000".substring(len) + s;
+    }
+
+    @ExecFunction(name = "year_month")
+    public static Expression yearMonth(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(t.getYear() + "-" + padTwo(t.getMonthValue()));
+    }
+
+    @ExecFunction(name = "day_hour")
+    public static Expression dayHour(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getDayOfMonth()) + " " + padTwo(t.getHour()));
+    }
+
+    @ExecFunction(name = "day_minute")
+    public static Expression dayMinute(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getDayOfMonth()) + " " + padTwo(t.getHour()) + ":"
+                + padTwo(t.getMinute()));
+    }
+
+    @ExecFunction(name = "day_second")
+    public static Expression daySecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getDayOfMonth()) + " " + padTwo(t.getHour()) + ":"
+                + padTwo(t.getMinute()) + ":" + padTwo(t.getSecond()));
+    }
+
+    @ExecFunction(name = "day_microsecond")
+    public static Expression dayMicrosecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getDayOfMonth()) + " " + padTwo(t.getHour()) + ":"
+                + padTwo(t.getMinute()) + ":" + padTwo(t.getSecond()) + "."
+                + padMicro(t.getNano() / 1000));
+    }
+
+    @ExecFunction(name = "hour_minute")
+    public static Expression hourMinute(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getHour()) + ":" + padTwo(t.getMinute()));
+    }
+
+    @ExecFunction(name = "hour_second")
+    public static Expression hourSecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getHour()) + ":" + padTwo(t.getMinute()) + ":"
+                + padTwo(t.getSecond()));
+    }
+
+    @ExecFunction(name = "hour_microsecond")
+    public static Expression hourMicrosecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getHour()) + ":" + padTwo(t.getMinute()) + ":"
+                + padTwo(t.getSecond()) + "." + padMicro(t.getNano() / 1000));
+    }
+
+    @ExecFunction(name = "minute_second")
+    public static Expression minuteSecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getMinute()) + ":" + padTwo(t.getSecond()));
+    }
+
+    @ExecFunction(name = "minute_microsecond")
+    public static Expression minuteMicrosecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getMinute()) + ":" + padTwo(t.getSecond()) + "."
+                + padMicro(t.getNano() / 1000));
+    }
+
+    @ExecFunction(name = "second_microsecond")
+    public static Expression secondMicrosecond(DateTimeV2Literal dateTime) {
+        LocalDateTime t = dateTime.toJavaDateType();
+        return new VarcharLiteral(padTwo(t.getSecond()) + "." + padMicro(t.getNano() / 1000));
     }
 
     /**
@@ -407,6 +531,11 @@ public class DateTimeExtractAndTransform {
         return fromUnixTime(second, new VarcharLiteral("%Y-%m-%d %H:%i:%s.%f"));
     }
 
+    @ExecFunction(name = "from_unixtime")
+    public static Expression fromUnixTime(DecimalV3Literal second) {
+        return fromUnixTime(second, new VarcharLiteral("%Y-%m-%d %H:%i:%s.%f"));
+    }
+
     /**
      * date transformation function: from_unixtime
      */
@@ -436,14 +565,25 @@ public class DateTimeExtractAndTransform {
      */
     @ExecFunction(name = "from_unixtime")
     public static Expression fromUnixTime(DecimalLiteral second, StringLikeLiteral format) {
-        format = (StringLikeLiteral) SupportJavaDateFormatter.translateJavaFormatter(format);
+        return fromUnixTime(second.getValue(), format);
+    }
 
-        if (second.getValue().signum() < 0) {
-            throw new AnalysisException("Operation from_unixtime of " + second.getValue() + " out of range");
+    /**
+     * date transformation function: from_unixtime
+     */
+    @ExecFunction(name = "from_unixtime")
+    public static Expression fromUnixTime(DecimalV3Literal second, StringLikeLiteral format) {
+        return fromUnixTime(second.getValue(), format);
+    }
+
+    private static Expression fromUnixTime(BigDecimal second, StringLikeLiteral format) {
+        if (second.signum() < 0) {
+            throw new AnalysisException("Operation from_unixtime of " + second + " out of range");
         }
-
+        format = (StringLikeLiteral) SupportJavaDateFormatter.translateJavaFormatter(format);
+        BigDecimal microSeconds = second.movePointRight(second.scale()).setScale(0, RoundingMode.DOWN);
         ZonedDateTime dateTime = LocalDateTime.of(1970, 1, 1, 0, 0, 0)
-                .plusSeconds(second.getValue().longValue())
+                .plus(microSeconds.longValue(), ChronoUnit.MICROS)
                 .atZone(ZoneId.of("UTC+0"))
                 .toOffsetDateTime()
                 .atZoneSameInstant(DateUtils.getTimeZone());
@@ -452,7 +592,7 @@ public class DateTimeExtractAndTransform {
                 dateTime.getDayOfMonth(), dateTime.getHour(), dateTime.getMinute(), dateTime.getSecond(),
                 dateTime.getNano() / 1000);
         if (datetime.checkRange()) {
-            throw new AnalysisException("Operation from_unixtime of " + second.getValue() + " out of range");
+            throw new AnalysisException("Operation from_unixtime of " + second + " out of range");
         }
         return dateFormat(datetime, format);
     }
@@ -525,14 +665,52 @@ public class DateTimeExtractAndTransform {
      */
     @ExecFunction(name = "to_days")
     public static Expression toDays(DateV2Literal date) {
-        return new IntegerLiteral(((int) Duration.between(
-                LocalDateTime.of(0, 1, 1, 0, 0, 0), date.toJavaDateType()).toDays()));
+        return new IntegerLiteral((int) calcDayNumber(date.getYear(), date.getMonth(), date.getDay()));
     }
 
     @ExecFunction(name = "to_days")
     public static Expression toDays(DateTimeV2Literal date) {
-        return new IntegerLiteral(((int) Duration.between(
-                LocalDateTime.of(0, 1, 1, 0, 0, 0), date.toJavaDateType()).toDays()));
+        return new IntegerLiteral((int) calcDayNumber(date.getYear(), date.getMonth(), date.getDay()));
+    }
+
+    /**
+     * date transformation function: to_seconds
+     */
+    @ExecFunction(name = "to_seconds")
+    public static Expression toSeconds(DateV2Literal date) {
+        return new BigIntLiteral(calcDayNumber(date.getYear(), date.getMonth(), date.getDay()) * 86400L);
+    }
+
+    @ExecFunction(name = "to_seconds")
+    public static Expression toSeconds(DateTimeV2Literal date) {
+        return new BigIntLiteral(calcDayNumber(date.getYear(), date.getMonth(), date.getDay()) * 86400L
+                                    + date.getHour() * 3600L + date.getMinute() * 60L + date.getSecond());
+    }
+
+    // Java Duration cannot represent days before 0000-01-01, so using it would turn
+    // TO_DAYS('0000-01-01') into the diff between that date and itself (0).
+    // We use BE's arithmetic instead so 0000-01-01 returns 1 as expected.
+    // Previous FE logic often matched BE only because Java treats year 0 as leap
+    // making TO_DAYS('0000-02-29') fold to 59.
+    // While BE/MySQL consider year 0 common, so:
+    // TO_DAYS('0000-02-28') == 59 and TO_DAYS('0000-02-29') == NULL. After
+    // 0000-03-01 the two implementations naturally align again.
+    private static long calcDayNumber(long year, long month, long day) {
+        if (year == 0 && month == 0) {
+            return 0;
+        }
+        if (year == 0 && month == 1 && day == 1) {
+            return 1;
+        }
+
+        long y = year;
+        long delsum = 365L * y + 31L * (month - 1) + day;
+        if (month <= 2) {
+            y -= 1;
+        } else {
+            delsum -= (month * 4 + 23) / 10;
+        }
+        return delsum + y / 4 - y / 100 + y / 400;
     }
 
     /**
@@ -570,12 +748,30 @@ public class DateTimeExtractAndTransform {
             secondValue = 59;
         }
 
-        double totalSeconds = Math.abs(hourValue) * 3600 + minuteValue * 60
-                + Math.round(secondValue * 1000000.0) / 1000000.0;
-        if (hourValue < 0) {
-            totalSeconds = -totalSeconds;
+        return new TimeV2Literal((int) Math.abs(hourValue), (int) minuteValue, (int) secondValue,
+                            (int) Math.round(secondValue * 1000000) % 1000000, 6, hourValue < 0);
+    }
+
+    /**
+     * time transformation function: maketime
+     */
+    @ExecFunction(name = "maketime")
+    public static Expression makeTime(BigIntLiteral hour, BigIntLiteral minute, BigIntLiteral second) {
+        long hourValue = hour.getValue();
+        long minuteValue = minute.getValue();
+        long secondValue = second.getValue();
+
+        if (minuteValue < 0 || minuteValue >= 60 || secondValue < 0 || secondValue >= 60) {
+            return new NullLiteral(TimeV2Type.SYSTEM_DEFAULT);
         }
-        return new TimeV2Literal(totalSeconds);
+        if (Math.abs(hourValue) > 838) {
+            hourValue = hourValue > 0 ? 838 : -838;
+            minuteValue = 59;
+            secondValue = 59;
+        }
+
+        return new TimeV2Literal((int) Math.abs(hourValue), (int) minuteValue,
+                        (int) secondValue, 0, 0, hourValue < 0);
     }
 
     /**
@@ -1115,6 +1311,20 @@ public class DateTimeExtractAndTransform {
     }
 
     /**
+     * date arithmetic function previous_day
+     */
+    @ExecFunction(name = "previous_day")
+    public static Expression previousDay(DateV2Literal date, StringLiteral day) {
+        int dayOfWeek = getDayOfWeek(day.getValue());
+        if (dayOfWeek == 0) {
+            throw new RuntimeException("Invalid day of week: " + day.getValue());
+        }
+        int daysToSub = (date.getDayOfWeek() - dayOfWeek + 7) % 7;
+        daysToSub = daysToSub == 0 ? 7 : daysToSub;
+        return date.plusDays(-daysToSub);
+    }
+
+    /**
      * date transform function sec_to_time
      */
     @ExecFunction(name = "sec_to_time")
@@ -1248,5 +1458,86 @@ public class DateTimeExtractAndTransform {
             year += (year >= 70) ? 1900 : 2000;
         }
         return year * 100 + month % 12 + 1;
+    }
+
+    /**
+     * date extract function hour_from_unixtime
+     */
+    @ExecFunction(name = "hour_from_unixtime")
+    public static Expression hourFromUnixtime(BigIntLiteral unixTime) {
+        long epochSecond = unixTime.getValue();
+        if (epochSecond < 0 || epochSecond > TIMESTAMP_VALID_MAX) {
+            throw new AnalysisException("Function hour_from_unixtime out of range(between 0 and "
+                            + TIMESTAMP_VALID_MAX + "): " + epochSecond);
+        }
+
+        ZoneId timeZone = DateUtils.getTimeZone();
+        ZonedDateTime zonedDateTime = Instant.ofEpochSecond(epochSecond).atZone(timeZone);
+        return new TinyIntLiteral((byte) zonedDateTime.getHour());
+    }
+
+    /**
+     * date extract function minute_from_unixtime
+     */
+    @ExecFunction(name = "minute_from_unixtime")
+    public static Expression minuteFromUnixtime(BigIntLiteral unixTime) {
+        long localTime = unixTime.getValue();
+        if (localTime < 0 || localTime > TIMESTAMP_VALID_MAX) {
+            throw new AnalysisException("Function minute_from_unixtime out of range(between 0 and "
+                    + TIMESTAMP_VALID_MAX + "): " + localTime);
+        }
+
+        localTime = localTime - (localTime / 3600) * 3600;
+
+        byte minute = (byte) (localTime / 60);
+        return new TinyIntLiteral(minute);
+    }
+
+    /**
+     * date extract function second_from_unixtime
+     */
+    @ExecFunction(name = "second_from_unixtime")
+    public static Expression secondFromUnixtime(BigIntLiteral unixTime) {
+        long localTime = unixTime.getValue();
+        if (localTime < 0 || localTime > TIMESTAMP_VALID_MAX) {
+            throw new AnalysisException("Function second_from_unixtime out of range(between 0 and "
+                    + TIMESTAMP_VALID_MAX + "): " + localTime);
+        }
+
+        long remainder;
+        if (localTime >= 0) {
+            remainder = localTime % 60;
+        } else {
+            remainder = localTime % 60;
+            if (remainder < 0) {
+                remainder += 60;
+            }
+        }
+        return new TinyIntLiteral((byte) remainder);
+    }
+
+    /**
+     * date extract function microsecond_from_unixtime
+     */
+    @ExecFunction(name = "microsecond_from_unixtime")
+    public static Expression microsecondFromUnixtime(DecimalV3Literal unixTime) {
+        BigDecimal value = unixTime.getValue();
+
+        long seconds = value.longValue();
+        if (seconds < 0 || seconds > TIMESTAMP_VALID_MAX) {
+            throw new AnalysisException("Function microsecond_from_unixtime out of range(between 0 and "
+                    + TIMESTAMP_VALID_MAX + "): " + seconds);
+        }
+
+        DecimalV3Type dataType = (DecimalV3Type) unixTime.getDataType();
+        int scale = dataType.getScale();
+
+        BigDecimal fractional = value.remainder(BigDecimal.ONE);
+        long fraction = fractional.movePointRight(scale).longValue();
+
+        if (scale < 6) {
+            fraction *= (long) Math.pow(10, 6 - scale);
+        }
+        return new IntegerLiteral((int) fraction);
     }
 }

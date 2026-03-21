@@ -17,9 +17,9 @@
 
 package org.apache.doris.datasource.property.metastore;
 
-import org.apache.doris.datasource.property.ConnectorPropertiesUtils;
-import org.apache.doris.datasource.property.ConnectorProperty;
-import org.apache.doris.datasource.property.ParamRules;
+import org.apache.doris.foundation.property.ConnectorPropertiesUtils;
+import org.apache.doris.foundation.property.ConnectorProperty;
+import org.apache.doris.foundation.property.ParamRules;
 
 import com.google.common.base.Strings;
 import lombok.Getter;
@@ -114,9 +114,9 @@ public class AWSGlueMetaStoreBaseProperties {
 
         return new ParamRules().requireTogether(new String[]{glueAccessKey, glueSecretKey},
                         "glue.access_key and glue.secret_key must be set together")
-                .requireAtLeastOne(new String[]{glueAccessKey, glueIAMRole},
-                        "At least one of glue.access_key or glue.role_arn must be set")
-                .require(glueEndpoint, "glue.endpoint must be set");
+                .require(glueEndpoint, "glue.endpoint must be set")
+                .check(() -> StringUtils.isNotBlank(glueEndpoint) && !glueEndpoint.startsWith("https://"),
+                        "glue.endpoint must use https protocol,please set glue.endpoint to https://...");
     }
 
     private void checkAndInit() {
@@ -133,6 +133,22 @@ public class AWSGlueMetaStoreBaseProperties {
             //follow aws sdk default region
             glueRegion = "us-east-1";
         }
+    }
+
+    /**
+     * Validate that at least one Glue credential (an access key or an IAM role) is explicitly provided.
+     *
+     * Purpose: Some catalog implementations (for example, Iceberg) do not support obtaining credentials
+     * from the default credential chain (instance metadata, environment variables, etc.). In addition,
+     * the configuration or UI may only expose two options: {@code glue.access_key} and {@code glue.role_arn}.
+     * In such cases, at least one of these must be explicitly set. If neither is provided, an
+     * {@link IllegalArgumentException} is thrown to prompt the user to complete the configuration.
+     */
+    protected void requireExplicitGlueCredentials() {
+        if (StringUtils.isNotBlank(glueAccessKey) || StringUtils.isNotBlank(glueIAMRole)) {
+            return;
+        }
+        throw new IllegalArgumentException("At least one of glue.access_key or glue.role_arn must be set");
     }
 
     private String extractRegionFromEndpoint(Matcher matcher) {

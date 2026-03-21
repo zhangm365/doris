@@ -17,11 +17,10 @@
 
 #pragma once
 
-#include <common/multi_version.h>
-
+#include "common/multi_version.h"
 #include "runtime/exec_env.h"
 #include "runtime/memory/memory_profile.h"
-#include "util/runtime_profile.h"
+#include "runtime/runtime_profile.h"
 
 namespace doris {
 
@@ -44,7 +43,7 @@ public:
         std::stringstream ss;
         std::vector<RuntimeProfile*> profiles;
         auto version_ptr = _process_profile.get();
-        auto* process_profile = const_cast<doris::RuntimeProfile*>(version_ptr.get());
+        auto* process_profile = version_ptr.get();
         process_profile->get_children(&profiles);
         for (auto* profile : profiles) {
             profile->pretty_print(&ss);

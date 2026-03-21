@@ -64,6 +64,7 @@ import javax.annotation.Nullable;
 public class HyperGraphComparator {
     // This second join can be inferred to the first join by map value,
     // The map value means the child's should be no-nullable
+    // please aware ASOF OUTER JOIN can only be converted to ASOF INNER JOIN
     static Map<Pair<JoinType, JoinType>, Pair<Boolean, Boolean>> canInferredJoinTypeMap = ImmutableMap
             .<Pair<JoinType, JoinType>, Pair<Boolean, Boolean>>builder()
             .put(Pair.of(JoinType.LEFT_SEMI_JOIN, JoinType.INNER_JOIN), Pair.of(false, false))
@@ -71,6 +72,8 @@ public class HyperGraphComparator {
             .put(Pair.of(JoinType.INNER_JOIN, JoinType.LEFT_OUTER_JOIN), Pair.of(false, true))
             .put(Pair.of(JoinType.INNER_JOIN, JoinType.RIGHT_OUTER_JOIN), Pair.of(true, false))
             .put(Pair.of(JoinType.INNER_JOIN, JoinType.FULL_OUTER_JOIN), Pair.of(true, true))
+            .put(Pair.of(JoinType.ASOF_LEFT_INNER_JOIN, JoinType.ASOF_LEFT_OUTER_JOIN), Pair.of(false, true))
+            .put(Pair.of(JoinType.ASOF_RIGHT_INNER_JOIN, JoinType.ASOF_RIGHT_OUTER_JOIN), Pair.of(true, false))
             .put(Pair.of(JoinType.LEFT_OUTER_JOIN, JoinType.FULL_OUTER_JOIN), Pair.of(true, false))
             .put(Pair.of(JoinType.RIGHT_OUTER_JOIN, JoinType.FULL_OUTER_JOIN), Pair.of(false, true))
             .build();
@@ -88,7 +91,8 @@ public class HyperGraphComparator {
     private final Map<JoinEdge, Pair<JoinType, Pair<Set<Slot>, Set<Slot>>>> inferredViewEdgeWithCond = new HashMap<>();
     private List<JoinEdge> viewJoinEdgesAfterInferring;
     private List<FilterEdge> viewFilterEdgesAfterInferring;
-    private final long eliminateViewNodesMap;
+    private final long shouldEliminateViewNodesMap;
+    private long reservedShouldEliminatedViewNodes;
 
     /**
      * constructor
@@ -98,9 +102,10 @@ public class HyperGraphComparator {
         this.queryHyperGraph = queryHyperGraph;
         this.viewHyperGraph = viewHyperGraph;
         this.logicalCompatibilityContext = logicalCompatibilityContext;
-        this.eliminateViewNodesMap = LongBitmap.newBitmapDiff(
+        this.shouldEliminateViewNodesMap = LongBitmap.newBitmapDiff(
                 viewHyperGraph.getNodesMap(),
                 LongBitmap.newBitmap(logicalCompatibilityContext.getQueryToViewNodeIDMapping().values()));
+        this.reservedShouldEliminatedViewNodes = this.shouldEliminateViewNodesMap;
     }
 
     /**
@@ -156,11 +161,11 @@ public class HyperGraphComparator {
                 .forEach(e -> pullUpQueryExprWithEdge.put(e, e.getExpressions()));
         Sets.difference(getViewJoinEdgeSet(), Sets.newHashSet(queryToViewJoinEdge.values()))
                 .stream()
-                .filter(e -> !LongBitmap.isOverlap(e.getReferenceNodes(), eliminateViewNodesMap))
+                .filter(e -> !LongBitmap.isOverlap(e.getReferenceNodes(), shouldEliminateViewNodesMap))
                 .forEach(e -> pullUpViewExprWithEdge.put(e, e.getExpressions()));
         Sets.difference(getViewFilterEdgeSet(), Sets.newHashSet(queryToViewFilterEdge.values()))
                 .stream()
-                .filter(e -> !LongBitmap.isOverlap(e.getReferenceNodes(), eliminateViewNodesMap))
+                .filter(e -> !LongBitmap.isOverlap(e.getReferenceNodes(), shouldEliminateViewNodesMap))
                 .forEach(e -> pullUpViewExprWithEdge.put(e, e.getExpressions()));
 
         return buildComparisonRes();
@@ -196,7 +201,7 @@ public class HyperGraphComparator {
         // eliminate by unique
         if (joinEdge.getJoinType().isLeftOuterJoin() && joinEdge.isRightSimple()) {
             long eliminatedRight =
-                    LongBitmap.newBitmapIntersect(joinEdge.getRightExtendedNodes(), eliminateViewNodesMap);
+                    LongBitmap.newBitmapIntersect(joinEdge.getRightExtendedNodes(), reservedShouldEliminatedViewNodes);
             if (LongBitmap.getCardinality(eliminatedRight) != 1) {
                 return false;
             }
@@ -204,8 +209,14 @@ public class HyperGraphComparator {
             if (rigthPlan == null) {
                 return false;
             }
-            return JoinUtils.canEliminateByLeft(joinEdge.getJoin(),
+            boolean couldEliminateByLeft = JoinUtils.canEliminateByLeft(joinEdge.getJoin(),
                     rigthPlan.getLogicalProperties().getTrait());
+            // if eliminated successfully, should refresh the eliminateViewNodesMap
+            if (couldEliminateByLeft) {
+                this.reservedShouldEliminatedViewNodes =
+                        LongBitmap.newBitmapDiff(reservedShouldEliminatedViewNodes, eliminatedRight);
+            }
+            return couldEliminateByLeft;
         }
         // eliminate by pk fk
         if (joinEdge.getJoinType().isInnerJoin()) {
@@ -213,17 +224,30 @@ public class HyperGraphComparator {
                 return false;
             }
             long eliminatedLeft =
-                    LongBitmap.newBitmapIntersect(joinEdge.getLeftExtendedNodes(), eliminateViewNodesMap);
+                    LongBitmap.newBitmapIntersect(joinEdge.getLeftExtendedNodes(), reservedShouldEliminatedViewNodes);
             long eliminatedRight =
-                    LongBitmap.newBitmapIntersect(joinEdge.getRightExtendedNodes(), eliminateViewNodesMap);
+                    LongBitmap.newBitmapIntersect(joinEdge.getRightExtendedNodes(), reservedShouldEliminatedViewNodes);
+            // Only eliminate the node which is in eliminateViewNodesMap
             if (LongBitmap.getCardinality(eliminatedLeft) == 0
                     && LongBitmap.getCardinality(eliminatedRight) == 1) {
-                return canEliminatePrimaryByForeign(joinEdge.getRightExtendedNodes(), joinEdge.getLeftExtendedNodes(),
+                boolean canEliminated = canEliminatePrimaryByForeign(joinEdge.getRightExtendedNodes(),
+                        joinEdge.getLeftExtendedNodes(),
                         joinEdge.getRightInputSlots(), joinEdge.getLeftInputSlots(), joinEdge);
+                if (canEliminated) {
+                    this.reservedShouldEliminatedViewNodes = LongBitmap.newBitmapDiff(
+                            reservedShouldEliminatedViewNodes, joinEdge.getRightExtendedNodes());
+                }
+                return canEliminated;
             } else if (LongBitmap.getCardinality(eliminatedLeft) == 1
                     && LongBitmap.getCardinality(eliminatedRight) == 0) {
-                return canEliminatePrimaryByForeign(joinEdge.getLeftExtendedNodes(), joinEdge.getRightExtendedNodes(),
+                boolean canEliminate = canEliminatePrimaryByForeign(joinEdge.getLeftExtendedNodes(),
+                        joinEdge.getRightExtendedNodes(),
                         joinEdge.getLeftInputSlots(), joinEdge.getRightInputSlots(), joinEdge);
+                if (canEliminate) {
+                    this.reservedShouldEliminatedViewNodes = LongBitmap.newBitmapDiff(
+                            reservedShouldEliminatedViewNodes, joinEdge.getLeftExtendedNodes());
+                }
+                return canEliminate;
             }
         }
         return false;
@@ -232,15 +256,46 @@ public class HyperGraphComparator {
     private boolean tryEliminateNodesAndEdge() {
         boolean hasFilterEdgeAbove = viewHyperGraph.getFilterEdges().stream()
                 .filter(e -> LongBitmap.getCardinality(e.getReferenceNodes()) == 1)
-                .anyMatch(e -> LongBitmap.isSubset(e.getReferenceNodes(), eliminateViewNodesMap));
+                .anyMatch(e -> LongBitmap.isSubset(e.getReferenceNodes(), shouldEliminateViewNodesMap));
         if (hasFilterEdgeAbove) {
             // If there is some filter edge above the eliminated node, we should rebuild a plan
             // Right now, just reject it.
             return false;
         }
-        return viewHyperGraph.getJoinEdges().stream()
-                .filter(joinEdge -> LongBitmap.isOverlap(joinEdge.getReferenceNodes(), eliminateViewNodesMap))
-                .allMatch(this::canEliminateViewEdge);
+        long allCanEliminateNodes = 0;
+        for (JoinEdge joinEdge : viewHyperGraph.getJoinEdges()) {
+            long canEliminateSideNodes = getCanEliminateSideNodes(joinEdge);
+            allCanEliminateNodes = LongBitmap.or(allCanEliminateNodes, canEliminateSideNodes);
+            if (LongBitmap.isOverlap(canEliminateSideNodes, reservedShouldEliminatedViewNodes)
+                    && !canEliminateViewEdge(joinEdge)) {
+                return false;
+            }
+        }
+        // check all can eliminateNodes contains all should eliminate nodes, to avoid some nodes can not be eliminated
+        // but in shouldEliminateViewNodesMap
+        // check all needed to eliminate nodes already be eliminated
+        return LongBitmap.containAll(allCanEliminateNodes, shouldEliminateViewNodesMap)
+                && LongBitmap.getCardinality(reservedShouldEliminatedViewNodes) == 0;
+    }
+
+    private static long getCanEliminateSideNodes(JoinEdge joinEdge) {
+        long leftExtendedNodes = joinEdge.getLeftExtendedNodes();
+        long rightExtendedNodes = joinEdge.getRightExtendedNodes();
+        long nodesToCheck = LongBitmap.newBitmap();
+        if (joinEdge.getJoinType().isLeftOuterJoin() && joinEdge.isRightSimple()) {
+            if (LongBitmap.getCardinality(rightExtendedNodes) == 1) {
+                nodesToCheck = LongBitmap.or(rightExtendedNodes, nodesToCheck);
+            }
+        }
+        if (joinEdge.getJoinType().isInnerJoin()) {
+            if (LongBitmap.getCardinality(leftExtendedNodes) == 1) {
+                nodesToCheck = LongBitmap.or(leftExtendedNodes, nodesToCheck);
+            }
+            if (LongBitmap.getCardinality(rightExtendedNodes) == 1) {
+                nodesToCheck = LongBitmap.or(rightExtendedNodes, nodesToCheck);
+            }
+        }
+        return nodesToCheck;
     }
 
     private boolean compareNodeWithExpr(StructInfoNode query, StructInfoNode view) {
@@ -558,12 +613,17 @@ public class HyperGraphComparator {
 
     private boolean compareJoinEdgeWithNode(JoinEdge query, JoinEdge view) {
         boolean res = false;
+        // if eliminateViewNodesMap is not empty, we should compare the join nodes after eliminating
         if (query.getJoinType().swap() == view.getJoinType()) {
-            res |= getViewNodesByQuery(query.getLeftExtendedNodes()) == view.getRightExtendedNodes()
-                    && getViewNodesByQuery(query.getRightExtendedNodes()) == view.getLeftExtendedNodes();
+            res |= getViewNodesByQuery(query.getLeftExtendedNodes()) == LongBitmap.newBitmapDiff(
+                    view.getRightExtendedNodes(), this.shouldEliminateViewNodesMap)
+                    && getViewNodesByQuery(query.getRightExtendedNodes()) == LongBitmap.newBitmapDiff(
+                    view.getLeftExtendedNodes(), this.shouldEliminateViewNodesMap);
         }
-        res |= getViewNodesByQuery(query.getLeftExtendedNodes()) == view.getLeftExtendedNodes()
-                && getViewNodesByQuery(query.getRightExtendedNodes()) == view.getRightExtendedNodes();
+        res |= getViewNodesByQuery(query.getLeftExtendedNodes()) == LongBitmap.newBitmapDiff(
+                view.getLeftExtendedNodes(), this.shouldEliminateViewNodesMap)
+                && getViewNodesByQuery(query.getRightExtendedNodes()) == LongBitmap.newBitmapDiff(
+                view.getRightExtendedNodes(), this.shouldEliminateViewNodesMap);
         return res;
     }
 

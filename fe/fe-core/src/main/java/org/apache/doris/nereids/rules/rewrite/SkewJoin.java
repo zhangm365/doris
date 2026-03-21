@@ -29,6 +29,8 @@ import org.apache.doris.nereids.trees.plans.AbstractPlan;
 import org.apache.doris.nereids.trees.plans.DistributeType;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
+import org.apache.doris.nereids.types.DataType;
+import org.apache.doris.nereids.util.TypeCoercionUtils;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
 
@@ -48,7 +50,7 @@ public class SkewJoin extends OneRewriteRuleFactory {
     public Rule build() {
         return logicalJoin()
                 .when(join -> join.getJoinType().isOneSideOuterJoin()
-                        || join.getJoinType().isInnerJoin())
+                        || join.getJoinType().isInnerJoin() || join.getJoinType().isAsofJoin())
                 .when(join -> join.getDistributeHint().distributeType == DistributeType.NONE)
                 .whenNot(LogicalJoin::isMarkJoin)
                 .thenApply(SkewJoin::transform).toRule(RuleType.SALT_JOIN);
@@ -79,14 +81,15 @@ public class SkewJoin extends OneRewriteRuleFactory {
         if (join.left().getOutputSet().contains(equal.right())) {
             equal = equal.commute();
         }
-        if (join.getJoinType().isInnerJoin() || join.getJoinType().isLeftOuterJoin()) {
+        if (join.getJoinType().isInnerJoin() || join.getJoinType().isLeftOuterJoin()
+                || join.getJoinType().isAsofInnerJoin() || join.getJoinType().isAsofLeftOuterJoin()) {
             Expression leftEqHand = equal.child(0);
             if (left.getStats().findColumnStatistics(leftEqHand) != null
                     && left.getStats().findColumnStatistics(leftEqHand).getHotValues() != null) {
                 skewExpr = leftEqHand;
                 hotValues.addAll(left.getStats().findColumnStatistics(leftEqHand).getHotValues().keySet());
             }
-        } else if (join.getJoinType().isRightOuterJoin()) {
+        } else if (join.getJoinType().isRightOuterJoin() || join.getJoinType().isAsofRightOuterJoin()) {
             Expression rightEqHand = equal.child(1);
             if (right.getStats().findColumnStatistics(rightEqHand) != null
                     && right.getStats().findColumnStatistics(rightEqHand).getHotValues() != null) {
@@ -108,8 +111,13 @@ public class SkewJoin extends OneRewriteRuleFactory {
             join.setHint(hint);
             return join;
         } else {
+            List<Expression> newHotValues = new ArrayList<>(hotValues.size());
+            DataType dataType = skewExpr.getDataType();
+            for (Expression value : hotValues) {
+                newHotValues.add(TypeCoercionUtils.castIfNotSameType(value, dataType));
+            }
             DistributeHint hint = new DistributeHint(DistributeType.SHUFFLE_RIGHT,
-                    new JoinSkewInfo(skewExpr, hotValues, false));
+                    new JoinSkewInfo(skewExpr, newHotValues, false));
             join.setHint(hint);
             return SaltJoin.transform(join);
         }

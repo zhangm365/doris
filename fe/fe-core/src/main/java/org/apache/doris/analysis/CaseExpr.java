@@ -20,13 +20,6 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
-import org.apache.doris.thrift.TCaseExpr;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-
-import com.google.common.base.Preconditions;
 import com.google.gson.annotations.SerializedName;
 
 import java.util.List;
@@ -77,12 +70,10 @@ public class CaseExpr extends Expr {
     /**
      * use for Nereids ONLY
      */
-    public CaseExpr(List<CaseWhenClause> whenClauses, Expr elseExpr) {
+    public CaseExpr(List<CaseWhenClause> whenClauses, Expr elseExpr, boolean nullable) {
         super();
         for (CaseWhenClause whenClause : whenClauses) {
-            Preconditions.checkNotNull(whenClause.getWhenExpr());
             children.add(whenClause.getWhenExpr());
-            Preconditions.checkNotNull(whenClause.getThenExpr());
             children.add(whenClause.getThenExpr());
         }
         if (elseExpr != null) {
@@ -92,12 +83,21 @@ public class CaseExpr extends Expr {
         // nereids do not have CaseExpr, and nereids will unify the types,
         // so just use the first then type
         type = children.get(1).getType();
+        this.nullable = nullable;
     }
 
     protected CaseExpr(CaseExpr other) {
         super(other);
         hasCaseExpr = other.hasCaseExpr;
         hasElseExpr = other.hasElseExpr;
+    }
+
+    public boolean isHasCaseExpr() {
+        return hasCaseExpr;
+    }
+
+    public boolean isHasElseExpr() {
+        return hasElseExpr;
     }
 
     @Override
@@ -120,77 +120,7 @@ public class CaseExpr extends Expr {
     }
 
     @Override
-    public String toSqlImpl() {
-        StringBuilder output = new StringBuilder("CASE");
-        int childIdx = 0;
-        if (hasCaseExpr) {
-            output.append(' ').append(children.get(childIdx++).toSql());
-        }
-        while (childIdx + 2 <= children.size()) {
-            output.append(" WHEN " + children.get(childIdx++).toSql());
-            output.append(" THEN " + children.get(childIdx++).toSql());
-        }
-        if (hasElseExpr) {
-            output.append(" ELSE " + children.get(children.size() - 1).toSql());
-        }
-        output.append(" END");
-        return output.toString();
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        StringBuilder output = new StringBuilder("CASE");
-        int childIdx = 0;
-        if (hasCaseExpr) {
-            output.append(' ')
-                    .append(children.get(childIdx++).toSql(disableTableName, needExternalSql, tableType, table));
-        }
-        while (childIdx + 2 <= children.size()) {
-            output.append(
-                    " WHEN " + children.get(childIdx++).toSql(disableTableName, needExternalSql, tableType, table));
-            output.append(
-                    " THEN " + children.get(childIdx++).toSql(disableTableName, needExternalSql, tableType, table));
-        }
-        if (hasElseExpr) {
-            output.append(" ELSE " + children.get(children.size() - 1)
-                    .toSql(disableTableName, needExternalSql, tableType, table));
-        }
-        output.append(" END");
-        return output.toString();
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        msg.node_type = TExprNodeType.CASE_EXPR;
-        msg.case_expr = new TCaseExpr(hasCaseExpr, hasElseExpr);
-    }
-
-    @Override
-    public boolean isNullable() {
-        int loopStart;
-        int loopEnd = children.size();
-        if (hasCaseExpr) {
-            loopStart = 2;
-        } else {
-            loopStart = 1;
-        }
-        if (hasElseExpr) {
-            --loopEnd;
-        }
-        for (int i = loopStart; i < loopEnd; i += 2) {
-            Expr thenExpr = children.get(i);
-            if (thenExpr.isNullable()) {
-                return true;
-            }
-        }
-        if (hasElseExpr) {
-            if (children.get(children.size() - 1).isNullable()) {
-                return true;
-            }
-        } else {
-            return true;
-        }
-        return false;
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitCaseExpr(this, context);
     }
 }

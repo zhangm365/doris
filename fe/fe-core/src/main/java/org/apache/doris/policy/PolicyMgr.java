@@ -23,7 +23,6 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.Table;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.UserException;
@@ -56,6 +55,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
@@ -68,7 +68,7 @@ public class PolicyMgr implements Writable {
     private ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
 
     @SerializedName(value = "typeToPolicyMap")
-    private Map<PolicyTypeEnum, List<Policy>> typeToPolicyMap = Maps.newConcurrentMap();
+    private ConcurrentMap<PolicyTypeEnum, List<Policy>> typeToPolicyMap = Maps.newConcurrentMap();
 
     // ctlName -> dbName -> tableName -> List<RowPolicy>
     private Map<String, Map<String, Map<String, List<RowPolicy>>>> tablePolicies = Maps.newConcurrentMap();
@@ -362,7 +362,7 @@ public class PolicyMgr implements Writable {
             return res;
         }
         Set<String> roles = Env.getCurrentEnv().getAccessManager().getAuth().getRolesByUserWithLdap(user).stream()
-                .map(role -> ClusterNamespace.getNameFromFullName(role.getRoleName())).collect(Collectors.toSet());
+                .map(role -> role.getRoleName()).collect(Collectors.toSet());
         readLock();
         try {
             // double check in lock,avoid NPE

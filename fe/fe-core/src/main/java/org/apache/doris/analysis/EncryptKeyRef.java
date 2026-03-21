@@ -17,13 +17,11 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.thrift.TExprNode;
 
 import com.google.gson.annotations.SerializedName;
 
+@Deprecated
 public class EncryptKeyRef extends Expr {
     @SerializedName("ekn")
     private EncryptKeyName encryptKeyName;
@@ -44,24 +42,13 @@ public class EncryptKeyRef extends Expr {
         this.type = Type.VARCHAR;
     }
 
-    @Override
-    protected String toSqlImpl() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(encryptKeyName.toSql());
-        return sb.toString();
+    public EncryptKeyName getEncryptKeyName() {
+        return encryptKeyName;
     }
 
     @Override
-    protected String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(encryptKeyName.toSql());
-        return sb.toString();
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        // no operation
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitEncryptKeyRef(this, context);
     }
 
     @Override

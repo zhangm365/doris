@@ -35,41 +35,42 @@
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/signal_handler.h"
 #include "common/status.h"
-#include "runtime/decimalv2_value.h"
-#include "runtime/define_primitive_type.h"
+#include "core/binary_cast.hpp"
+#include "core/block/block.h"
+#include "core/block/column_with_type_and_name.h"
+#include "core/column/column.h"
+#include "core/column/column_array.h"
+#include "core/column/column_vector.h"
+#include "core/data_type/data_type_array.h"
+#include "core/data_type/data_type_number.h"
+#include "core/data_type/define_primitive_type.h"
+#include "core/data_type/primitive_type.h"
+#include "core/field.h"
+#include "core/string_ref.h"
+#include "core/types.h"
+#include "core/value/decimalv2_value.h"
+#include "core/value/large_int_value.h"
+#include "core/value/timestamptz_value.h"
+#include "core/value/vdatetime_value.h"
+#include "exprs/function/cast/cast_to_string.h"
+#include "exprs/vexpr.h"
+#include "exprs/vexpr_context.h"
 #include "runtime/descriptors.h"
 #include "runtime/exec_env.h"
-#include "runtime/large_int_value.h"
 #include "runtime/memory/mem_tracker.h"
-#include "runtime/primitive_type.h"
+#include "runtime/runtime_profile.h"
 #include "runtime/runtime_state.h"
 #include "runtime/thread_context.h"
-#include "util/binary_cast.hpp"
 #include "util/defer_op.h"
-#include "util/runtime_profile.h"
 #include "util/uid_util.h"
-#include "vec/columns/column.h"
-#include "vec/columns/column_array.h"
-#include "vec/columns/column_vector.h"
-#include "vec/common/string_ref.h"
-#include "vec/core/block.h"
-#include "vec/core/column_with_type_and_name.h"
-#include "vec/core/field.h"
-#include "vec/core/types.h"
-#include "vec/data_types/data_type_array.h"
-#include "vec/data_types/data_type_number.h"
-#include "vec/exprs/vexpr.h"
-#include "vec/exprs/vexpr_context.h"
-#include "vec/functions/cast/cast_to_string.h"
-#include "vec/runtime/vdatetime_value.h"
 
 namespace doris {
 
 static std::unordered_set<PrimitiveType> PRIMITIVE_TYPE_SET {
-        TYPE_BOOLEAN,  TYPE_TINYINT, TYPE_SMALLINT,   TYPE_INT,      TYPE_BIGINT,
-        TYPE_LARGEINT, TYPE_FLOAT,   TYPE_DOUBLE,     TYPE_TIMEV2,   TYPE_CHAR,
-        TYPE_VARCHAR,  TYPE_STRING,  TYPE_HLL,        TYPE_BITMAP,   TYPE_DATE,
-        TYPE_DATETIME, TYPE_DATEV2,  TYPE_DATETIMEV2, TYPE_DECIMALV2};
+        TYPE_BOOLEAN,  TYPE_TINYINT, TYPE_SMALLINT,   TYPE_INT,       TYPE_BIGINT,
+        TYPE_LARGEINT, TYPE_FLOAT,   TYPE_DOUBLE,     TYPE_TIMEV2,    TYPE_CHAR,
+        TYPE_VARCHAR,  TYPE_STRING,  TYPE_HLL,        TYPE_BITMAP,    TYPE_DATE,
+        TYPE_DATETIME, TYPE_DATEV2,  TYPE_DATETIMEV2, TYPE_DECIMALV2, TYPE_TIMESTAMPTZ};
 
 Status FoldConstantExecutor::fold_constant_vexpr(const TFoldConstantParams& params,
                                                  PConstantExprResult* response) {
@@ -85,31 +86,30 @@ Status FoldConstantExecutor::fold_constant_vexpr(const TFoldConstantParams& para
     SCOPED_ATTACH_TASK(_mem_tracker);
     signal::SignalTaskIdKeeper keeper(_query_id);
 
+    DataTypeSerDe::FormatOptions format_options = DataTypeSerDe::get_default_format_options();
+    format_options.timezone = &_runtime_state->timezone_obj();
+
     for (const auto& m : expr_map) {
         PExprResultMap pexpr_result_map;
         for (const auto& n : m.second) {
-            vectorized::VExprContextSPtr ctx;
+            VExprContextSPtr ctx;
             const TExpr& texpr = n.second;
             // create expr tree from TExpr
-            RETURN_IF_ERROR(vectorized::VExpr::create_expr_tree(texpr, ctx));
+            RETURN_IF_ERROR(VExpr::create_expr_tree(texpr, ctx));
             // prepare and open context
             RETURN_IF_ERROR(_prepare_and_open(ctx.get()));
 
-            vectorized::Block tmp_block;
-            tmp_block.insert({vectorized::ColumnUInt8::create(1),
-                              std::make_shared<vectorized::DataTypeUInt8>(), ""});
-            int result_column = -1;
+            ColumnWithTypeAndName tmp_data;
             // calc vexpr
-            RETURN_IF_ERROR(ctx->execute(&tmp_block, &result_column));
-            DCHECK(result_column != -1);
+            RETURN_IF_ERROR(ctx->execute_const_expr(tmp_data));
             // covert to thrift type
             const auto& res_type = ctx->root()->data_type();
             TPrimitiveType::type t_type = doris::to_thrift(res_type->get_primitive_type());
             // collect result
             PExprResult expr_result;
             std::string result;
-            const auto& column_ptr = tmp_block.get_by_position(result_column).column;
-            const auto& column_type = tmp_block.get_by_position(result_column).type;
+            const auto& column_ptr = tmp_data.column;
+            const auto& column_type = tmp_data.type;
             // 4 from fe: Config.be_exec_version maybe need remove after next version, now in 2.1
             if (_runtime_state->be_exec_version() >= 4 && params.__isset.is_nereids &&
                 params.is_nereids) {
@@ -137,7 +137,7 @@ Status FoldConstantExecutor::fold_constant_vexpr(const TFoldConstantParams& para
                     }
                     RETURN_IF_ERROR(_get_result((void*)string_ref.data, string_ref.size,
                                                 ctx->root()->data_type(), column_ptr, column_type,
-                                                result));
+                                                result, format_options));
                 }
                 expr_result.set_content(std::move(result));
                 expr_result.mutable_type()->set_type(t_type);
@@ -145,8 +145,8 @@ Status FoldConstantExecutor::fold_constant_vexpr(const TFoldConstantParams& para
                 expr_result.mutable_type()->set_precision(res_type->get_precision());
                 expr_result.mutable_type()->set_len(
                         res_type->get_primitive_type() == PrimitiveType::TYPE_STRING
-                                ? assert_cast<const vectorized::DataTypeString*>(
-                                          vectorized::remove_nullable(res_type).get())
+                                ? assert_cast<const DataTypeString*>(
+                                          remove_nullable(res_type).get())
                                           ->len()
                                 : -1);
                 pexpr_result_map.mutable_map()->insert({n.first, expr_result});
@@ -189,11 +189,10 @@ Status FoldConstantExecutor::_prepare_and_open(Context* ctx) {
     return ctx->open(_runtime_state.get());
 }
 
-Status FoldConstantExecutor::_get_result(void* src, size_t size,
-                                         const vectorized::DataTypePtr& type,
-                                         const vectorized::ColumnPtr column_ptr,
-                                         const vectorized::DataTypePtr column_type,
-                                         std::string& result) {
+Status FoldConstantExecutor::_get_result(void* src, size_t size, const DataTypePtr& type,
+                                         const ColumnPtr column_ptr, const DataTypePtr column_type,
+                                         std::string& result,
+                                         const DataTypeSerDe::FormatOptions& options) {
     switch (type->get_primitive_type()) {
     case TYPE_BOOLEAN: {
         bool val = *reinterpret_cast<const bool*>(src);
@@ -251,19 +250,24 @@ Status FoldConstantExecutor::_get_result(void* src, size_t size,
     case TYPE_DATE:
     case TYPE_DATETIME: {
         auto* date_value = reinterpret_cast<VecDateTimeValue*>(src);
-        result = vectorized::CastToString::from_date_or_datetime(*date_value);
+        result = CastToString::from_date_or_datetime(*date_value);
         break;
     }
     case TYPE_DATEV2: {
         DateV2Value<DateV2ValueType> value =
                 binary_cast<uint32_t, DateV2Value<DateV2ValueType>>(*(int32_t*)src);
-        result = vectorized::CastToString::from_datev2(value);
+        result = CastToString::from_datev2(value);
         break;
     }
     case TYPE_DATETIMEV2: {
         DateV2Value<DateTimeV2ValueType> value =
                 binary_cast<uint64_t, DateV2Value<DateTimeV2ValueType>>(*(int64_t*)src);
-        result = vectorized::CastToString::from_datetimev2(value, type->get_scale());
+        result = CastToString::from_datetimev2(value, type->get_scale());
+        break;
+    }
+    case TYPE_TIMESTAMPTZ: {
+        auto value = binary_cast<uint64_t, TimestampTzValue>(*(int64_t*)src);
+        result = CastToString::from_timestamptz(value, type->get_scale(), options.timezone);
         break;
     }
     case TYPE_DECIMALV2: {
@@ -282,7 +286,7 @@ Status FoldConstantExecutor::_get_result(void* src, size_t size,
     case TYPE_QUANTILE_STATE:
     case TYPE_IPV4:
     case TYPE_IPV6: {
-        result = column_type->to_string(*column_ptr, 0);
+        result = column_type->to_string(*column_ptr, 0, options);
         break;
     }
     default:

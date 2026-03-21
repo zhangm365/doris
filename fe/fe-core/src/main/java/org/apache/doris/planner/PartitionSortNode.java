@@ -18,7 +18,10 @@
 package org.apache.doris.planner;
 
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
+import org.apache.doris.analysis.ExprToThriftVisitor;
 import org.apache.doris.analysis.SortInfo;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.nereids.trees.plans.PartitionTopnPhase;
 import org.apache.doris.nereids.trees.plans.WindowFuncType;
 import org.apache.doris.thrift.TExplainLevel;
@@ -62,7 +65,6 @@ public class PartitionSortNode extends PlanNode {
         this.partitionLimit = partitionLimit;
         this.phase = phase;
         this.tupleIds.addAll(Lists.newArrayList(info.getSortTupleDescriptor().getId()));
-        this.nullableTupleIds.addAll(input.getNullableTupleIds());
         this.children.add(input);
     }
 
@@ -91,7 +93,7 @@ public class PartitionSortNode extends PlanNode {
             output.append(prefix).append("partition by: ");
 
             for (Expr partitionExpr : partitionExprs) {
-                strings.add(partitionExpr.toSql());
+                strings.add(partitionExpr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
             }
 
             output.append(Joiner.on(", ").join(strings));
@@ -109,7 +111,7 @@ public class PartitionSortNode extends PlanNode {
             } else {
                 output.append(", ");
             }
-            output.append(expr.next().toSql()).append(" ");
+            output.append(expr.next().accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE)).append(" ");
             output.append(isAsc.next() ? "ASC" : "DESC");
         }
         output.append("\n");
@@ -160,7 +162,7 @@ public class PartitionSortNode extends PlanNode {
 
         TPartitionSortNode partitionSortNode = new TPartitionSortNode();
         partitionSortNode.setTopNAlgorithm(topNAlgorithm);
-        partitionSortNode.setPartitionExprs(Expr.treesToThrift(partitionExprs));
+        partitionSortNode.setPartitionExprs(ExprToThriftVisitor.treesToThrift(partitionExprs));
         partitionSortNode.setSortInfo(sortInfo);
         partitionSortNode.setHasGlobalLimit(hasGlobalLimit);
         partitionSortNode.setPartitionInnerLimit(partitionLimit);

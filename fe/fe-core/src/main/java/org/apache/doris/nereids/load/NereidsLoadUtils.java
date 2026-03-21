@@ -21,10 +21,9 @@ import org.apache.doris.catalog.AggregateType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
+import org.apache.doris.catalog.info.PartitionNamesInfo;
 import org.apache.doris.common.UserException;
-import org.apache.doris.info.PartitionNamesInfo;
 import org.apache.doris.nereids.CascadesContext;
-import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.analyzer.UnboundAlias;
 import org.apache.doris.nereids.analyzer.UnboundOneRowRelation;
 import org.apache.doris.nereids.analyzer.UnboundSlot;
@@ -38,6 +37,8 @@ import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.analysis.BindExpression;
 import org.apache.doris.nereids.rules.analysis.BindSink;
 import org.apache.doris.nereids.rules.expression.ExpressionNormalization;
+import org.apache.doris.nereids.rules.expression.ExpressionRewrite;
+import org.apache.doris.nereids.rules.expression.rules.FoldConstantRuleOnFE;
 import org.apache.doris.nereids.rules.rewrite.MergeProjects;
 import org.apache.doris.nereids.rules.rewrite.OneRewriteRuleFactory;
 import org.apache.doris.nereids.trees.expressions.Alias;
@@ -46,6 +47,7 @@ import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.StatementScopeIdGenerator;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.EncryptKeyRef;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonbParseErrorToNull;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonbParseErrorToValue;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
@@ -199,8 +201,8 @@ public class NereidsLoadUtils {
                 partitionNamesInfo != null ? partitionNamesInfo.getPartitionNames() : ImmutableList.of(),
                 isPartialUpdate, partialUpdateNewKeyPolicy, DMLCommandType.LOAD, currentRootPlan);
 
-        CascadesContext cascadesContext = CascadesContext.initContext(new StatementContext(), currentRootPlan,
-                PhysicalProperties.ANY);
+        CascadesContext cascadesContext = CascadesContext.initContext(ConnectContext.get().getStatementContext(),
+                currentRootPlan, PhysicalProperties.ANY);
         ConnectContext ctx = cascadesContext.getConnectContext();
         // we force convert nullable column to non-nullable column for load
         // so set feDebug to false to avoid AdjustNullableRule report error
@@ -237,6 +239,11 @@ public class NereidsLoadUtils {
                     //      the NereidsLoadPlanInfoCollector will not generate slot by id#0,
                     //      so we must use MergeProjects here
                     new MergeProjects(),
+                    // RewriteEncryptKeyRef must be placed before ExpressionNormalization,
+                    // because setDebugSkipFoldConstant(true) will skip FoldConstantRule which
+                    // is responsible for folding EncryptKeyRef to StringLiteral.
+                    // We need to handle EncryptKeyRef separately to support KEY syntax in stream load.
+                    new RewriteEncryptKeyRef(),
                     new ExpressionNormalization())
             )).execute();
             Rewriter.getWholeTreeRewriterWithCustomJobs(cascadesContext, ImmutableList.of()).execute();
@@ -370,6 +377,30 @@ public class NereidsLoadUtils {
                                 Lists.newArrayList(
                                         new LogicalPostProject(projectList, (Plan) logicalOlapTableSink.child(0))));
                     }).toRule(RuleType.ADD_POST_PROJECT_FOR_LOAD);
+        }
+    }
+
+    /**
+     * RewriteEncryptKeyRef
+     * This rule rewrites EncryptKeyRef to StringLiteral in stream load.
+     * Since setDebugSkipFoldConstant(true) is set during stream load planning,
+     * FoldConstantRule will be skipped and EncryptKeyRef won't be folded.
+     * This rule handles EncryptKeyRef separately to support KEY syntax in stream load columns parameter.
+     */
+    private static class RewriteEncryptKeyRef extends ExpressionRewrite {
+        private static final FoldConstantRuleOnFE FOLD_ENCRYPT_KEY_REF = FoldConstantRuleOnFE.VISITOR_INSTANCE;
+
+        public RewriteEncryptKeyRef() {
+            super(((expression, context) -> {
+                // Use rewriteUp to traverse the expression tree bottom-up and only fold
+                // EncryptKeyRef nodes to StringLiteral, leaving all other expressions unchanged.
+                return expression.rewriteUp(e -> {
+                    if (e instanceof EncryptKeyRef) {
+                        return e.accept(FOLD_ENCRYPT_KEY_REF, context);
+                    }
+                    return e;
+                });
+            }));
         }
     }
 }

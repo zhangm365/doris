@@ -17,6 +17,7 @@
 
 package org.apache.doris.alter;
 
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
@@ -36,6 +37,7 @@ import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.proto.OlapFile;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.OriginStatement;
+import org.apache.doris.service.FrontendOptions;
 import org.apache.doris.task.AgentTask;
 import org.apache.doris.task.AgentTaskQueue;
 import org.apache.doris.thrift.TTabletType;
@@ -53,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class CloudRollupJobV2 extends RollupJobV2 {
     private static final Logger LOG = LogManager.getLogger(CloudRollupJobV2.class);
@@ -84,10 +87,10 @@ public class CloudRollupJobV2 extends RollupJobV2 {
                        Column whereColumn,
                        int baseSchemaHash, int rollupSchemaHash, KeysType rollupKeysType,
                        short rollupShortKeyColumnCount,
-                       OriginStatement origStmt) throws AnalysisException {
+                       OriginStatement origStmt, Map<String, String> sessionVariable) throws AnalysisException {
         super(rawSql, jobId, dbId, tableId, tableName, timeoutMs, baseIndexId,
                 rollupIndexId, baseIndexName, rollupIndexName, rollupSchema, whereColumn,
-                baseSchemaHash, rollupSchemaHash, rollupKeysType, rollupShortKeyColumnCount, origStmt);
+                baseSchemaHash, rollupSchemaHash, rollupKeysType, rollupShortKeyColumnCount, origStmt, sessionVariable);
         ConnectContext context = ConnectContext.get();
         if (context != null) {
             String clusterName = "";
@@ -110,7 +113,7 @@ public class CloudRollupJobV2 extends RollupJobV2 {
         rollupIndexList.add(rollupIndexId);
         try {
             ((CloudInternalCatalog) Env.getCurrentInternalCatalog())
-                .commitMaterializedIndex(dbId, tableId, rollupIndexList, false);
+                    .commitMaterializedIndex(dbId, tableId, rollupIndexList, null, false);
         } catch (Exception e) {
             LOG.warn("commitMaterializedIndex Exception:{}", e);
             throw new AlterCancelException(e.getMessage());
@@ -118,6 +121,15 @@ public class CloudRollupJobV2 extends RollupJobV2 {
 
         LOG.info("onCreateRollupReplicaDone finished, dbId:{}, tableId:{}, jobId:{}, rollupIndexList:{}",
                 dbId, tableId, jobId, rollupIndexList);
+
+        List<Long> tabletIds = partitionIdToRollupIndex.values().stream()
+                .flatMap(rollupIndex -> rollupIndex.getTablets().stream()).map(Tablet::getId)
+                .collect(Collectors.toList());
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("force sync tablet stats for table: {}, index: {}, tabletNum: {}, tabletIds: {}", tableId,
+                    rollupIndexId, tabletIds.size(), tabletIds);
+        }
+        CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
     }
 
     @Override
@@ -128,7 +140,7 @@ public class CloudRollupJobV2 extends RollupJobV2 {
         while (true) {
             try {
                 ((CloudInternalCatalog) Env.getCurrentInternalCatalog())
-                    .dropMaterializedIndex(tableId, rollupIndexList, false);
+                    .dropMaterializedIndex(dbId, tableId, rollupIndexList, false);
                 for (Map.Entry<Long, Map<Long, Long>> partitionEntry : partitionIdToBaseRollupTabletIdMap.entrySet()) {
                     Long partitionId = partitionEntry.getKey();
                     Map<Long, Long> rollupTabletIdToBaseTabletId = partitionEntry.getValue();
@@ -207,7 +219,7 @@ public class CloudRollupJobV2 extends RollupJobV2 {
             TTabletType tabletType = tbl.getPartitionInfo().getTabletType(partitionId);
             MaterializedIndex rollupIndex = entry.getValue();
             Cloud.CreateTabletsRequest.Builder requestBuilder =
-                    Cloud.CreateTabletsRequest.newBuilder();
+                    Cloud.CreateTabletsRequest.newBuilder().setRequestIp(FrontendOptions.getLocalHostAddressCached());
             List<String> rowStoreColumns =
                                         tbl.getTableProperty().getCopiedRowStoreColumns();
             for (Tablet rollupTablet : rollupIndex.getTablets()) {
@@ -217,8 +229,8 @@ public class CloudRollupJobV2 extends RollupJobV2 {
                             partitionId, rollupTablet, tabletType, rollupSchemaHash,
                                     rollupKeysType, rollupShortKeyColumnCount, tbl.getCopiedBfColumns(),
                                     tbl.getBfFpp(), null, rollupSchema,
-                                    tbl.getDataSortInfo(), tbl.getCompressionType(), tbl.getStoragePolicy(),
-                                    tbl.isInMemory(), true,
+                                    tbl.getDataSortInfo(), tbl.getCompressionType(), tbl.getStorageFormat(),
+                                    tbl.getStoragePolicy(), tbl.isInMemory(), true,
                                     tbl.getName(), tbl.getTTLSeconds(),
                                     tbl.getEnableUniqueKeyMergeOnWrite(), tbl.storeRowColumn(),
                                     tbl.getBaseSchemaVersion(), tbl.getCompactionPolicy(),
@@ -233,7 +245,9 @@ public class CloudRollupJobV2 extends RollupJobV2 {
                                     tbl.rowStorePageSize(),
                                     tbl.variantEnableFlattenNested(), null,
                                     tbl.storagePageSize(), tbl.getTDEAlgorithmPB(),
-                                    tbl.storageDictPageSize(), true);
+                                    tbl.storageDictPageSize(), true,
+                                    tbl.getColumnSeqMapping(),
+                                    tbl.getVerticalCompactionNumColumnsPerGroup());
                 requestBuilder.addTabletMetas(builder);
             } // end for rollupTablets
             requestBuilder.setDbId(dbId);

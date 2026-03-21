@@ -24,6 +24,8 @@ import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.expressions.Slot;
+import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.nereids.trees.plans.AbstractPlan;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.algebra.Repeat;
@@ -38,6 +40,7 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 /**
  * PhysicalRepeat.
@@ -47,6 +50,7 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
 
     private final List<List<Expression>> groupingSets;
     private final List<NamedExpression> outputExpressions;
+    private final SlotReference groupingId;
 
     /**
      * Desc: Constructor for PhysicalRepeat.
@@ -54,6 +58,7 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
     public PhysicalRepeat(
             List<List<Expression>> groupingSets,
             List<NamedExpression> outputExpressions,
+            SlotReference groupingId,
             LogicalProperties logicalProperties,
             CHILD_TYPE child) {
         super(PlanType.PHYSICAL_REPEAT, logicalProperties, child);
@@ -63,12 +68,14 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
                 .collect(ImmutableList.toImmutableList());
         this.outputExpressions = ImmutableList.copyOf(
                 Objects.requireNonNull(outputExpressions, "outputExpressions can not be null"));
+        this.groupingId = Objects.requireNonNull(groupingId, "groupingId can not be null");
     }
 
     /**
      * Desc: Constructor for PhysicalRepeat.
      */
-    public PhysicalRepeat(List<List<Expression>> groupingSets, List<NamedExpression> outputExpressions,
+    private PhysicalRepeat(List<List<Expression>> groupingSets, List<NamedExpression> outputExpressions,
+            SlotReference groupingId,
             Optional<GroupExpression> groupExpression, LogicalProperties logicalProperties,
             PhysicalProperties physicalProperties, Statistics statistics, CHILD_TYPE child) {
         super(PlanType.PHYSICAL_REPEAT, groupExpression, logicalProperties,
@@ -79,6 +86,7 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
                 .collect(ImmutableList.toImmutableList());
         this.outputExpressions = ImmutableList.copyOf(
                 Objects.requireNonNull(outputExpressions, "outputExpressions can not be null"));
+        this.groupingId = Objects.requireNonNull(groupingId, "groupingId can not be null");
     }
 
     @Override
@@ -89,6 +97,10 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
     @Override
     public List<NamedExpression> getOutputExpressions() {
         return outputExpressions;
+    }
+
+    public SlotReference getGroupingId() {
+        return groupingId;
     }
 
     @Override
@@ -107,7 +119,7 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
 
     @Override
     public List<Slot> computeOutput() {
-        return outputExpressions.stream()
+        return Stream.concat(outputExpressions.stream(), Stream.of(groupingId))
                 .map(NamedExpression::toSlot)
                 .collect(ImmutableList.toImmutableList());
     }
@@ -148,47 +160,53 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
     @Override
     public PhysicalRepeat<Plan> withChildren(List<Plan> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupExpression,
-                getLogicalProperties(), physicalProperties, statistics, children.get(0));
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, outputExpressions,
+                groupingId, groupExpression,
+                getLogicalProperties(), physicalProperties, statistics, children.get(0)));
     }
 
     @Override
     public PhysicalRepeat<CHILD_TYPE> withGroupExpression(Optional<GroupExpression> groupExpression) {
-        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupExpression,
-                getLogicalProperties(), physicalProperties, statistics, child());
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, outputExpressions,
+                groupingId, groupExpression,
+                getLogicalProperties(), physicalProperties, statistics, child()));
     }
 
     @Override
     public Plan withGroupExprLogicalPropChildren(Optional<GroupExpression> groupExpression,
             Optional<LogicalProperties> logicalProperties, List<Plan> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupExpression,
-                logicalProperties.get(), physicalProperties, statistics, children.get(0));
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, outputExpressions,
+                groupingId, groupExpression,
+                logicalProperties.get(), physicalProperties, statistics, children.get(0)));
     }
 
     @Override
     public PhysicalRepeat<CHILD_TYPE> withPhysicalPropertiesAndStats(PhysicalProperties physicalProperties,
             Statistics statistics) {
-        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupExpression,
-                getLogicalProperties(), physicalProperties, statistics, child());
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, outputExpressions,
+                groupingId, groupExpression,
+                getLogicalProperties(), physicalProperties, statistics, child()));
     }
 
     @Override
     public PhysicalRepeat<CHILD_TYPE> withAggOutput(List<NamedExpression> newOutput) {
-        return new PhysicalRepeat<>(groupingSets, newOutput, Optional.empty(),
-                getLogicalProperties(), physicalProperties, statistics, child());
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, newOutput, groupingId,
+                Optional.empty(),
+                getLogicalProperties(), physicalProperties, statistics, child()));
     }
 
     @Override
     public PhysicalRepeat<CHILD_TYPE> withGroupSetsAndOutput(List<List<Expression>> groupingSets,
             List<NamedExpression> outputExpressionList) {
-        return new PhysicalRepeat<>(groupingSets, outputExpressionList, Optional.empty(),
-                getLogicalProperties(), physicalProperties, statistics, child());
+        return AbstractPlan.copyWithSameId(this, () -> new PhysicalRepeat<>(groupingSets, outputExpressionList,
+                groupingId, Optional.empty(),
+                getLogicalProperties(), physicalProperties, statistics, child()));
     }
 
     @Override
     public PhysicalRepeat<CHILD_TYPE> resetLogicalProperties() {
-        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupExpression,
+        return new PhysicalRepeat<>(groupingSets, outputExpressions, groupingId, groupExpression,
                 null, physicalProperties, statistics, child());
     }
 
@@ -199,7 +217,7 @@ public class PhysicalRepeat<CHILD_TYPE extends Plan> extends PhysicalUnary<CHILD
 
     @Override
     public void computeUniform(DataTrait.Builder builder) {
-        builder.addUniformSlot(child(0).getLogicalProperties().getTrait());
+        // roll up may generate new data
     }
 
     @Override

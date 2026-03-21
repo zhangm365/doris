@@ -20,28 +20,17 @@
 
 package org.apache.doris.analysis;
 
-import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.common.FormatOptions;
-import org.apache.doris.thrift.TExprNode;
-import org.apache.doris.thrift.TExprNodeType;
-import org.apache.doris.thrift.TStringLiteral;
 
 import com.google.common.base.Preconditions;
 import com.google.gson.annotations.SerializedName;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.io.UnsupportedEncodingException;
 import java.util.Objects;
 
 public class StringLiteral extends LiteralExpr {
-    private static final Logger LOG = LogManager.getLogger(StringLiteral.class);
     @SerializedName("v")
     private String value;
-    // Means the converted session variable need to be cast to int, such as "cast 'STRICT_TRANS_TABLES' to Integer".
-    private String beConverted = "";
 
     private StringLiteral() {
         super();
@@ -52,16 +41,12 @@ public class StringLiteral extends LiteralExpr {
         super();
         this.value = value;
         type = Type.VARCHAR;
-        analysisDone();
+        this.nullable = false;
     }
 
     protected StringLiteral(StringLiteral other) {
         super(other);
         value = other.value;
-    }
-
-    public void setBeConverted(String val) {
-        this.beConverted = val;
     }
 
     @Override
@@ -126,34 +111,13 @@ public class StringLiteral extends LiteralExpr {
     }
 
     @Override
-    public String toSqlImpl() {
-        return "'" + value.replaceAll("'", "''") + "'";
-    }
-
-    @Override
-    public String toSqlImpl(boolean disableTableName, boolean needExternalSql, TableType tableType,
-            TableIf table) {
-        return "'" + value.replaceAll("'", "''") + "'";
-    }
-
-    @Override
-    protected void toThrift(TExprNode msg) {
-        if (value == null) {
-            msg.node_type = TExprNodeType.NULL_LITERAL;
-        } else {
-            msg.string_literal = new TStringLiteral(value);
-            msg.node_type = TExprNodeType.STRING_LITERAL;
-        }
+    public <R, C> R accept(ExprVisitor<R, C> visitor, C context) {
+        return visitor.visitStringLiteral(this, context);
     }
 
     @Override
     public String getStringValue() {
         return value;
-    }
-
-    @Override
-    protected String getStringValueInComplexTypeForQuery(FormatOptions options) {
-        return options.getNestedStringWrapper() + getStringValueForQuery(options) + options.getNestedStringWrapper();
     }
 
     @Override

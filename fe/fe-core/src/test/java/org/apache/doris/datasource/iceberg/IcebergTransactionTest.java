@@ -19,9 +19,9 @@ package org.apache.doris.datasource.iceberg;
 
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.security.authentication.ExecutionAuthenticator;
-import org.apache.doris.common.util.SerializationUtils;
 import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.datasource.NameMapping;
+import org.apache.doris.foundation.util.SerializationUtils;
 import org.apache.doris.nereids.trees.plans.commands.insert.IcebergInsertCommandContext;
 import org.apache.doris.thrift.TFileContent;
 import org.apache.doris.thrift.TIcebergCommitData;
@@ -190,6 +190,10 @@ public class IcebergTransactionTest {
         try (MockedStatic<IcebergUtils> mockedStatic = Mockito.mockStatic(IcebergUtils.class)) {
             mockedStatic.when(() -> IcebergUtils.getIcebergTable(ArgumentMatchers.any(ExternalTable.class)))
                     .thenReturn(table);
+            // Allow parsePartitionValueFromString to call the real implementation
+            mockedStatic.when(() -> IcebergUtils.parsePartitionValueFromString(
+                    ArgumentMatchers.any(), ArgumentMatchers.any()))
+                    .thenCallRealMethod();
             IcebergTransaction txn = getTxn();
             txn.updateIcebergCommitData(ctdList);
             txn.beginInsert(icebergExternalTable, Optional.empty());

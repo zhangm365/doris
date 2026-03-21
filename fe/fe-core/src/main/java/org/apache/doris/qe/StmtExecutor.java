@@ -18,6 +18,8 @@
 package org.apache.doris.qe;
 
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
+import org.apache.doris.analysis.ExprToStringValueVisitor;
 import org.apache.doris.analysis.OutFileClause;
 import org.apache.doris.analysis.PlaceHolderExpr;
 import org.apache.doris.analysis.Queriable;
@@ -25,6 +27,8 @@ import org.apache.doris.analysis.RedirectStatus;
 import org.apache.doris.analysis.StatementBase;
 import org.apache.doris.analysis.StorageBackend;
 import org.apache.doris.analysis.StorageBackend.StorageType;
+import org.apache.doris.analysis.StringValueContext;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
@@ -44,7 +48,6 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.FeConstants;
-import org.apache.doris.common.FormatOptions;
 import org.apache.doris.common.NereidsException;
 import org.apache.doris.common.QueryTimeoutException;
 import org.apache.doris.common.Status;
@@ -62,12 +65,12 @@ import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.datasource.FileScanNode;
 import org.apache.doris.datasource.tvf.source.TVFScanNode;
+import org.apache.doris.foundation.format.FormatOptions;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mysql.FieldInfo;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.mysql.MysqlCommand;
 import org.apache.doris.mysql.MysqlEofPacket;
-import org.apache.doris.mysql.MysqlOkPacket;
 import org.apache.doris.mysql.MysqlSerializer;
 import org.apache.doris.mysql.ProxyMysqlChannel;
 import org.apache.doris.nereids.NereidsPlanner;
@@ -121,6 +124,7 @@ import org.apache.doris.qe.cache.Cache;
 import org.apache.doris.qe.cache.CacheAnalyzer;
 import org.apache.doris.qe.cache.SqlCache;
 import org.apache.doris.resource.computegroup.ComputeGroupMgr;
+import org.apache.doris.resource.workloadgroup.WorkloadGroup;
 import org.apache.doris.rpc.BackendServiceProxy;
 import org.apache.doris.rpc.RpcException;
 import org.apache.doris.statistics.ResultRow;
@@ -261,9 +265,9 @@ public class StmtExecutor {
         }
         this.context.setStatementContext(statementContext);
         this.profile = new Profile(
-                            context.getSessionVariable().enableProfile(),
-                            context.getSessionVariable().getProfileLevel(),
-                            context.getSessionVariable().getAutoProfileThresholdMs());
+                context.getSessionVariable().enableProfile(),
+                context.getSessionVariable().getProfileLevel(),
+                context.getSessionVariable().getAutoProfileThresholdMs());
     }
 
     public boolean isProxy() {
@@ -282,9 +286,11 @@ public class StmtExecutor {
             }
             if (!expr.isLiteralOrCastExpr()) {
                 throw new UserException(
-                        "do not support non-literal expr in transactional insert operation: " + expr.toSql());
+                        "do not support non-literal expr in transactional insert operation: "
+                                + expr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
             }
-            row.addColBuilder().setValue(expr.getStringValueForStreamLoad(options));
+            row.addColBuilder().setValue(expr.accept(ExprToStringValueVisitor.INSTANCE,
+                    StringValueContext.forStreamLoad(options)));
         }
         return row.build();
     }
@@ -336,9 +342,77 @@ public class StmtExecutor {
         builder.instancesNumPerBe(
                 beToInstancesNum.entrySet().stream().map(entry -> entry.getKey() + ":" + entry.getValue())
                         .collect(Collectors.joining(",")));
-        builder.parallelFragmentExecInstance(String.valueOf(context.sessionVariable.getParallelExecInstanceNum()));
+        String clusterName = context.sessionVariable.resolveCloudClusterName(context);
+        builder.parallelFragmentExecInstance(
+                String.valueOf(context.sessionVariable.getParallelExecInstanceNum(clusterName)));
         builder.traceId(context.getSessionVariable().getTraceId());
         builder.isNereids(context.getState().isNereids() ? "Yes" : "No");
+        try {
+            List<WorkloadGroup> list = Env.getCurrentEnv()
+                    .getWorkloadGroupMgr()
+                    .getWorkloadGroup(ConnectContext.get());
+
+            if (!list.isEmpty()) {
+                WorkloadGroup wg = list.get(0);
+                SummaryProfile summary = getSummaryProfile();
+                summary.setMaxConcurrency(
+                        Integer.parseInt(wg.getProperties().getOrDefault(WorkloadGroup.MAX_CONCURRENCY, "0")));
+                summary.setMaxQueueSize(Integer.parseInt(wg.getProperties()
+                        .getOrDefault(WorkloadGroup.MAX_QUEUE_SIZE, "0")));
+                summary.setScanThreadNum(Integer.parseInt(
+                        wg.getProperties().getOrDefault(WorkloadGroup.SCAN_THREAD_NUM, "-1")));
+                summary.setMemoryHighWatermark(Integer.parseInt(
+                        wg.getProperties().getOrDefault(WorkloadGroup.MEMORY_HIGH_WATERMARK,
+                                String.valueOf(WorkloadGroup.MEMORY_HIGH_WATERMARK_DEFAULT_VALUE))));
+                summary.setMemoryLowWatermark(
+                        Integer.parseInt(
+                                wg.getProperties().getOrDefault(
+                                        WorkloadGroup.MEMORY_LOW_WATERMARK,
+                                        String.valueOf(WorkloadGroup.MEMORY_LOW_WATERMARK_DEFAULT_VALUE)
+                                )
+                        )
+                );
+                summary.setMinRemoteScanThreadNum(
+                        Integer.parseInt(
+                                wg.getProperties().getOrDefault(
+                                        WorkloadGroup.MIN_REMOTE_SCAN_THREAD_NUM,
+                                        "-1"
+                                )
+                        )
+                );
+                summary.setMaxRemoteScanThreadNum(
+                        Integer.parseInt(
+                                wg.getProperties().getOrDefault(
+                                        WorkloadGroup.MAX_REMOTE_SCAN_THREAD_NUM,
+                                        "-1"
+                                )
+                        )
+                );
+                summary.setTag(
+                        wg.getProperties().getOrDefault(WorkloadGroup.TAG,
+                                ""));
+                summary.setReadBytesPerSecond(
+                        Integer.parseInt(
+                                wg.getProperties().getOrDefault(
+                                        WorkloadGroup.READ_BYTES_PER_SECOND,
+                                        "-1"
+                                )
+                        )
+                );
+                summary.setRemoteReadBytesPerSecond(
+                        Integer.parseInt(
+                                wg.getProperties().getOrDefault(
+                                        WorkloadGroup.REMOTE_READ_BYTES_PER_SECOND,
+                                        "-1"
+                                )
+                        )
+                );
+                summary.setQueueTimeout(Integer.parseInt(
+                        wg.getProperties().getOrDefault(WorkloadGroup.QUEUE_TIMEOUT, "0")));
+            }
+        } catch (UserException e) {
+            LOG.warn(e);
+        }
         return builder.build();
     }
 
@@ -543,6 +617,12 @@ public class StmtExecutor {
                 if (context.getMinidump() != null && context.getMinidump().toString(4) != null) {
                     MinidumpUtils.saveMinidumpString(context.getMinidump(), DebugUtil.printId(context.queryId()));
                 }
+                // COMPUTE_GROUPS_NO_ALIVE_BE, planner can't get alive be, need retry
+                if (Config.isCloudMode() && SystemInfoService.needRetryWithReplan(e.getMessage())) {
+                    LOG.debug("planner failed with cloud compute group error, need retry. {}",
+                            context.getQueryIdentifier(), e);
+                    throw new UserException(e.getMessage());
+                }
                 LOG.warn("Analyze failed. {}", context.getQueryIdentifier(), e);
                 context.getState().setError(e.getMessage());
                 return;
@@ -672,7 +752,7 @@ public class StmtExecutor {
             // t1: client issues create table to master fe
             // t2: client issues query sql to observer fe, the query would fail due to not exist table in plan phase.
             // t3: observer fe receive editlog creating the table from the master fe
-            syncJournalIfNeeded();
+            syncJournalIfNeeded(context);
             try {
                 ((Command) logicalPlan).verifyCommandSupported(context);
                 ((Command) logicalPlan).run(context, this);
@@ -698,9 +778,7 @@ public class StmtExecutor {
                         new AnalysisException(e.getMessage(), e));
             } catch (Exception | Error e) {
                 // Maybe our bug
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Command({}) process failed.", originStmt.originStmt, e);
-                }
+                LOG.info("Command({}) process failed.", originStmt.originStmt, e);
                 context.getState().setError(ErrorCode.ERR_UNKNOWN_ERROR, e.getMessage());
                 throw new NereidsException("Command (" + originStmt.originStmt + ") process failed.",
                         new AnalysisException(e.getMessage() == null ? e.toString() : e.getMessage(), e));
@@ -735,7 +813,7 @@ public class StmtExecutor {
             // t2: client issues query sql to observer fe, the query would fail due to not exist table in
             //     plan phase.
             // t3: observer fe receive editlog creating the table from the master fe
-            syncJournalIfNeeded();
+            syncJournalIfNeeded(context);
             planner = new NereidsPlanner(statementContext);
             try {
                 checkBlockRulesByRegex(originStmt);
@@ -924,14 +1002,13 @@ public class StmtExecutor {
                 LOG.warn("retry due to exception {}. retried {} times. is rpc error: {}, is user error: {}.",
                         e.getMessage(), i, e instanceof RpcException, e instanceof UserException);
 
-                boolean isNeedRetry = false;
+                boolean isNeedRetry = e instanceof RpcException;
                 if (Config.isCloudMode()) {
                     // cloud mode retry
-                    isNeedRetry = false;
                     // errCode = 2, detailMessage = No backend available as scan node,
                     // please check the status of your backends. [10003: not alive]
                     List<String> bes = Env.getCurrentSystemInfo().getAllBackendIds().stream()
-                                .map(id -> Long.toString(id)).collect(Collectors.toList());
+                            .map(id -> Long.toString(id)).collect(Collectors.toList());
                     String msg = e.getMessage();
                     if (e instanceof UserException
                             && msg.contains(SystemInfoService.NO_SCAN_NODE_BACKEND_AVAILABLE_MSG)) {
@@ -957,8 +1034,6 @@ public class StmtExecutor {
                             }
                         }
                     }
-                } else {
-                    isNeedRetry = e instanceof RpcException;
                 }
                 if (i != retryTime - 1 && isNeedRetry
                         && context.getConnectType().equals(ConnectType.MYSQL) && !context.getMysqlChannel().isSend()) {
@@ -975,7 +1050,8 @@ public class StmtExecutor {
         }
     }
 
-    private void syncJournalIfNeeded() throws Exception {
+    /** syncJournalIfNeeded */
+    public static void syncJournalIfNeeded(ConnectContext context) throws Exception {
         final Env env = context.getEnv();
         if (env.isMaster() || !context.getSessionVariable().enableStrongConsistencyRead) {
             return;
@@ -1184,7 +1260,7 @@ public class StmtExecutor {
     private void handleQueryStmt() throws Exception {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Handling query {} with query id {}",
-                          originStmt.originStmt, DebugUtil.printId(context.queryId));
+                    originStmt.originStmt, DebugUtil.printId(context.queryId));
         }
 
         if (context.getConnectType() == ConnectType.MYSQL) {
@@ -1270,11 +1346,11 @@ public class StmtExecutor {
         CoordInterface coordBase = null;
         if (statementContext.isShortCircuitQuery()) {
             ShortCircuitQueryContext shortCircuitQueryContext =
-                        statementContext.getShortCircuitQueryContext() != null
-                                ? statementContext.getShortCircuitQueryContext()
-                                : new ShortCircuitQueryContext(planner, (Queriable) parsedStmt);
+                    statementContext.getShortCircuitQueryContext() != null
+                            ? statementContext.getShortCircuitQueryContext()
+                            : new ShortCircuitQueryContext(planner, (Queriable) parsedStmt);
             coordBase = new PointQueryExecutor(shortCircuitQueryContext,
-                        context.getSessionVariable().getMaxMsgSizeOfResultReceiver());
+                    context.getSessionVariable().getMaxMsgSizeOfResultReceiver());
             context.getState().setIsQuery(true);
         } else if (planner instanceof NereidsPlanner && ((NereidsPlanner) planner).getDistributedPlans() != null) {
             coord = new NereidsCoordinator(context,
@@ -1302,12 +1378,6 @@ public class StmtExecutor {
             if (context.getConnectType().equals(ConnectType.ARROW_FLIGHT_SQL)) {
                 Preconditions.checkState(!context.isReturnResultFromLocal());
                 profile.getSummaryProfile().setTempStartTime();
-                return;
-            }
-
-            if (context.isRunProcedure()) {
-                // plsql will get the returned results without sending them to mysql client.
-                // see org/apache/doris/plsql/executor/DorisRowResult.java
                 return;
             }
 
@@ -1482,8 +1552,8 @@ public class StmtExecutor {
             if (backend.isAlive()) {
                 List<Long> tabletIdList = new ArrayList<Long>();
                 Set<Long> beTabletIds = ((CloudEnv) Env.getCurrentEnv())
-                                           .getCloudTabletRebalancer()
-                                           .getSnapshotTabletsInPrimaryByBeId(backend.getId());
+                        .getCloudTabletRebalancer()
+                        .getSnapshotTabletsInPrimaryByBeId(backend.getId());
                 allTabletIds.forEach(tabletId -> {
                     if (beTabletIds.contains(tabletId)) {
                         tabletIdList.add(tabletId);
@@ -1532,11 +1602,15 @@ public class StmtExecutor {
             }
             context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         }
-        // send EOF
-        serializer.reset();
-        MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
-        eofPacket.writeTo(serializer);
-        context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+        // When CLIENT_DEPRECATE_EOF is set, the server should not send the intermediate
+        // EOF packet after column definitions. The client will go directly from column
+        // definitions to reading data rows.
+        if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+            serializer.reset();
+            MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
+            eofPacket.writeTo(serializer);
+            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+        }
     }
 
     private List<PrimitiveType> exprToStringType(List<Expr> exprs) {
@@ -1578,15 +1652,15 @@ public class StmtExecutor {
                 serializer.writeField(colNames.get(i), Type.STRING);
                 context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            serializer.reset();
+            // When CLIENT_DEPRECATE_EOF is set, no EOF/OK packet should be sent after
+            // parameter definitions. The driver knows how many params to expect from the
+            // prepare OK packet and simply stops reading after that count.
             if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+                serializer.reset();
                 MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
                 eofPacket.writeTo(serializer);
-            } else {
-                MysqlOkPacket okPacket = new MysqlOkPacket(context.getState());
-                okPacket.writeTo(serializer);
+                context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         }
         if (numColumns > 0) {
             for (Slot slot : output) {
@@ -1605,15 +1679,15 @@ public class StmtExecutor {
                 }
                 context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            serializer.reset();
+            // When CLIENT_DEPRECATE_EOF is set, no EOF/OK packet should be sent after
+            // column definitions. The driver knows how many columns to expect from the
+            // prepare OK packet and simply stops reading after that count.
             if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+                serializer.reset();
                 MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
                 eofPacket.writeTo(serializer);
-            } else {
-                MysqlOkPacket okPacket = new MysqlOkPacket(context.getState());
-                okPacket.writeTo(serializer);
+                context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
-            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         }
         context.getMysqlChannel().flush();
         context.getState().setNoop();
@@ -1623,7 +1697,8 @@ public class StmtExecutor {
         sendFields(colNames, null, types);
     }
 
-    private void sendFields(List<String> colNames, List<FieldInfo> fieldInfos, List<Type> types) throws IOException {
+    private void sendFields(List<String> colNames, List<FieldInfo> fieldInfos, List<Type> types) throws
+            IOException {
         Preconditions.checkState(context.getConnectType() == ConnectType.MYSQL);
         // sends how many columns
         serializer.reset();
@@ -1634,7 +1709,7 @@ public class StmtExecutor {
         context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         StatementContext statementContext = context.getStatementContext();
         boolean isShortCircuited = statementContext.isShortCircuitQuery()
-                        && statementContext.getShortCircuitQueryContext() != null;
+                && statementContext.getShortCircuitQueryContext() != null;
         ShortCircuitQueryContext ctx = statementContext.getShortCircuitQueryContext();
         // send field one by one
         for (int i = 0; i < colNames.size(); ++i) {
@@ -1662,11 +1737,15 @@ public class StmtExecutor {
                 context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
         }
-        // send EOF
-        serializer.reset();
-        MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
-        eofPacket.writeTo(serializer);
-        context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+        // When CLIENT_DEPRECATE_EOF is set, the server should not send the intermediate
+        // EOF packet after column definitions. The client will go directly from column
+        // definitions to reading data rows.
+        if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+            serializer.reset();
+            MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
+            eofPacket.writeTo(serializer);
+            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+        }
     }
 
     public void sendResultSet(ResultSet resultSet) throws IOException {
@@ -1748,6 +1827,7 @@ public class StmtExecutor {
                             break;
                         case DATETIME:
                         case DATETIMEV2:
+                        case TIMESTAMPTZ:
                             DateTimeV2Literal datetime = new DateTimeV2Literal(item);
                             long microSecond = datetime.getMicroSecond();
                             // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_text_resultset.html
@@ -1817,7 +1897,7 @@ public class StmtExecutor {
     public void handleReplayStmt(String result) throws IOException {
         ShowResultSetMetaData metaData = ShowResultSetMetaData.builder()
                 .addColumn(new Column("Plan Replayer dump url",
-                ScalarType.createVarchar(20)))
+                        ScalarType.createVarchar(20)))
                 .build();
         if (context.getConnectType() == ConnectType.MYSQL) {
             sendMetaData(metaData);
@@ -1857,7 +1937,7 @@ public class StmtExecutor {
 
     private boolean isShortCircuitedWithCtx() {
         return statementContext.isShortCircuitQuery()
-                        && statementContext.getShortCircuitQueryContext() != null;
+                && statementContext.getShortCircuitQueryContext() != null;
     }
 
     private List<Type> exprToType(List<Expr> exprs) {
@@ -1986,14 +2066,6 @@ public class StmtExecutor {
 
     public Coordinator getCoord() {
         return coord;
-    }
-
-    public List<String> getColumns() {
-        return parsedStmt.getColLabels();
-    }
-
-    public List<Type> getReturnTypes() {
-        return exprToType(parsedStmt.getResultExprs());
     }
 
     public List<Type> getReturnTypes(Queriable stmt) {

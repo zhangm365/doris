@@ -31,6 +31,7 @@ import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.OrderExpression;
+import org.apache.doris.nereids.trees.expressions.functions.generator.Unnest;
 import org.apache.doris.nereids.trees.expressions.literal.DecimalLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.IntegerLikeLiteral;
 import org.apache.doris.nereids.trees.expressions.literal.StringLikeLiteral;
@@ -254,6 +255,11 @@ public class NereidsParserTest extends ParserTestBase {
         logicalJoin = (LogicalJoin) logicalPlan.child(0);
         Assertions.assertEquals(JoinType.INNER_JOIN, logicalJoin.getJoinType());
 
+        String asofInnerJoin = "SELECT t1.a FROM t1 ASOF INNER JOIN t2 MATCH_CONDITION(t1.dt < t2.dt) ON t1.id = t2.id;";
+        logicalPlan = (LogicalPlan) nereidsParser.parseSingle(asofInnerJoin).child(0);
+        logicalJoin = (LogicalJoin) logicalPlan.child(0);
+        Assertions.assertEquals(JoinType.ASOF_LEFT_INNER_JOIN, logicalJoin.getJoinType());
+
         String leftJoin1 = "SELECT t1.a FROM t1 LEFT JOIN t2 ON t1.id = t2.id;";
         logicalPlan = (LogicalPlan) nereidsParser.parseSingle(leftJoin1).child(0);
         logicalJoin = (LogicalJoin) logicalPlan.child(0);
@@ -263,6 +269,11 @@ public class NereidsParserTest extends ParserTestBase {
         logicalPlan = (LogicalPlan) nereidsParser.parseSingle(leftJoin2).child(0);
         logicalJoin = (LogicalJoin) logicalPlan.child(0);
         Assertions.assertEquals(JoinType.LEFT_OUTER_JOIN, logicalJoin.getJoinType());
+
+        String asofLeftJoin = "SELECT t1.a FROM t1 ASOF JOIN t2 MATCH_CONDITION(t1.dt < t2.dt) ON t1.id = t2.id;";
+        logicalPlan = (LogicalPlan) nereidsParser.parseSingle(asofLeftJoin).child(0);
+        logicalJoin = (LogicalJoin) logicalPlan.child(0);
+        Assertions.assertEquals(JoinType.ASOF_LEFT_OUTER_JOIN, logicalJoin.getJoinType());
 
         String rightJoin1 = "SELECT t1.a FROM t1 RIGHT JOIN t2 ON t1.id = t2.id;";
         logicalPlan = (LogicalPlan) nereidsParser.parseSingle(rightJoin1).child(0);
@@ -527,6 +538,12 @@ public class NereidsParserTest extends ParserTestBase {
         sql = "set session a = default";
         nereidsParser.parseSingle(sql);
 
+        sql = "set a = on";
+        nereidsParser.parseSingle(sql);
+
+        sql = "set a = all";
+        nereidsParser.parseSingle(sql);
+
         sql = "set @@a = 10";
         nereidsParser.parseSingle(sql);
 
@@ -770,6 +787,20 @@ public class NereidsParserTest extends ParserTestBase {
         NereidsParser nereidsParser = new NereidsParser();
         String sql = "create user a superuser comment 'create user'";
         nereidsParser.parseSingle(sql);
+    }
+
+    @Test
+    public void testCreateUserWithRequire() {
+        NereidsParser parser = new NereidsParser();
+        parser.parseSingle("create user u1 require none");
+        parser.parseSingle("create user u2 identified by 'pwd' require san 'DNS:a.example'");
+    }
+
+    @Test
+    public void testAlterUserWithRequire() {
+        NereidsParser parser = new NereidsParser();
+        parser.parseSingle("alter user u1 require san 'URI:spiffe://example.org/service'");
+        parser.parseSingle("alter user if exists u2 identified by 'pwd' require none");
     }
 
     @Test
@@ -1492,5 +1523,11 @@ public class NereidsParserTest extends ParserTestBase {
                 + "WHEN MATCHED THEN DELETE "
                 + "WHEN NOT MATCHED THEN INSERT VALUES (c1, c2, c3)";
         Assertions.assertThrows(ParseException.class, () -> parser.parseSingle(invalidSql4));
+    }
+
+    @Test
+    public void testUnnest() {
+        String sql = "SELECT t.* FROM LATERAL unnest([1,2], ['hi','hello']) WITH ORDINALITY AS t(c1,c2);";
+        parsePlan(sql).matches(logicalGenerate().when(plan -> plan.getGenerators().get(0) instanceof Unnest));
     }
 }

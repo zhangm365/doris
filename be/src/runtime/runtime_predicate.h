@@ -24,28 +24,27 @@
 #include <string>
 
 #include "common/status.h"
-#include "exec/olap_common.h"
-#include "olap/shared_predicate.h"
-#include "olap/tablet_schema.h"
-#include "runtime/define_primitive_type.h"
-#include "runtime/primitive_type.h"
-#include "util/binary_cast.hpp"
-#include "vec/common/arena.h"
-#include "vec/core/field.h"
-#include "vec/core/types.h"
-#include "vec/runtime/vdatetime_value.h"
+#include "core/arena.h"
+#include "core/binary_cast.hpp"
+#include "core/data_type/define_primitive_type.h"
+#include "core/data_type/primitive_type.h"
+#include "core/field.h"
+#include "core/types.h"
+#include "core/value/vdatetime_value.h"
+#include "storage/olap_scan_common.h"
+#include "storage/predicate/shared_predicate.h"
+#include "storage/tablet/tablet_schema.h"
 
 namespace doris {
 class ColumnPredicate;
-
-namespace vectorized {
 
 class RuntimePredicate {
 public:
     RuntimePredicate(const TTopnFilterDesc& desc);
 
-    void init_target(int32_t target_node_id,
-                     phmap::flat_hash_map<int, SlotDescriptor*> slot_id_to_slot_desc);
+    Status init_target(int32_t target_node_id,
+                       phmap::flat_hash_map<int, SlotDescriptor*> slot_id_to_slot_desc,
+                       const int column_id);
 
     bool enable() const {
         // when sort node and scan node are not in the same fragment, predicate will be disabled
@@ -55,21 +54,8 @@ public:
 
     void set_detected_source() {
         std::unique_lock<std::shared_mutex> wlock(_rwlock);
+        _orderby_extrem = Field(PrimitiveType::TYPE_NULL);
         _detected_source = true;
-    }
-
-    Status set_tablet_schema(int32_t target_node_id, TabletSchemaSPtr tablet_schema) {
-        std::unique_lock<std::shared_mutex> wlock(_rwlock);
-        check_target_node_id(target_node_id);
-        if (_contexts[target_node_id].tablet_schema) {
-            return Status::OK();
-        }
-        RETURN_IF_ERROR(tablet_schema->have_column(_contexts[target_node_id].col_name));
-        _contexts[target_node_id].tablet_schema = tablet_schema;
-        int64_t index = DORIS_TRY(_contexts[target_node_id].get_field_index())
-                                _contexts[target_node_id]
-                                        .predicate = SharedPredicate::create_shared(index);
-        return Status::OK();
     }
 
     std::shared_ptr<ColumnPredicate> get_predicate(int32_t target_node_id) {
@@ -129,13 +115,8 @@ private:
     struct TargetContext {
         TExpr expr;
         std::string col_name;
-        TabletSchemaSPtr tablet_schema;
+        DataTypePtr col_data_type;
         std::shared_ptr<ColumnPredicate> predicate;
-
-        Result<int32_t> get_field_index() {
-            const auto& column = *DORIS_TRY(tablet_schema->column(col_name));
-            return tablet_schema->field_index(column.unique_id());
-        }
 
         bool target_is_slot() const {
             return expr.nodes[0].node_type == TExprNodeType::SLOT_REF &&
@@ -152,15 +133,14 @@ private:
     std::map<int32_t, TargetContext> _contexts;
 
     Field _orderby_extrem {PrimitiveType::TYPE_NULL};
-    Arena _predicate_arena;
-    std::function<std::string(const Field&)> _get_value_fn;
-    std::function<ColumnPredicate*(const DataTypePtr&, int, const std::string&, bool,
-                                   vectorized::Arena&)>
+    std::function<std::shared_ptr<ColumnPredicate>(const int cid, const std::string& col_name,
+                                                   const DataTypePtr& data_type, const Field& value,
+                                                   bool opposite)>
             _pred_constructor;
     bool _detected_source = false;
     bool _detected_target = false;
     bool _has_value = false;
+    PrimitiveType _type;
 };
 
-} // namespace vectorized
 } // namespace doris

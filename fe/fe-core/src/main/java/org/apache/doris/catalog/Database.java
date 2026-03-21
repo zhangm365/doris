@@ -17,10 +17,8 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.analysis.FunctionName;
 import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.cloud.catalog.CloudEnv;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
@@ -247,8 +245,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table>,
     }
 
     public void setNameWithoutLock(String newName) {
-        // ClusterNamespace.getNameFromFullName should be removed in 3.0
-        this.fullQualifiedName = ClusterNamespace.getNameFromFullName(newName);
+        this.fullQualifiedName = newName;
         for (Table table : idToTable.values()) {
             table.setQualifiedDbName(fullQualifiedName);
         }
@@ -798,7 +795,12 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table>,
         function.checkWritable();
         if (FunctionUtil.addFunctionImpl(function, ifNotExists, false, name2Function)) {
             Env.getCurrentEnv().getEditLog().logAddFunction(function);
-            FunctionUtil.translateToNereids(this.getFullName(), function);
+            try {
+                FunctionUtil.translateToNereidsThrows(this.getFullName(), function);
+            } catch (Exception e) {
+                name2Function.remove(function.getFunctionName().getFunction());
+                throw e;
+            }
         }
     }
 

@@ -18,6 +18,8 @@
 package org.apache.doris.nereids.util;
 
 import org.apache.doris.analysis.Expr;
+import org.apache.doris.analysis.ExprToSqlVisitor;
+import org.apache.doris.analysis.ToSqlParams;
 import org.apache.doris.nereids.analyzer.UnboundSlot;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.rules.expression.rules.FoldConstantRuleOnFE;
@@ -29,7 +31,7 @@ import org.apache.doris.persist.gson.GsonUtils;
 
 import com.google.common.collect.Lists;
 import com.google.gson.reflect.TypeToken;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -55,7 +57,7 @@ public class FrontendConjunctsUtils {
 
     public static Expression exprToExpression(Expr expr) {
         NereidsParser nereidsParser = new NereidsParser();
-        return nereidsParser.parseExpression(expr.toSql());
+        return nereidsParser.parseExpression(expr.accept(ExprToSqlVisitor.INSTANCE, ToSqlParams.WITH_TABLE));
     }
 
     /**

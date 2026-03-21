@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_hive_topn_lazy_mat", "p0,external,hive,external_docker,external_docker_hive") {
+suite("test_hive_topn_lazy_mat", "p0,external") {
     String enabled = context.config.otherConfigs.get("enableHiveTest")
     if (enabled == null || !enabled.equalsIgnoreCase("true")) {
         logger.info("diable Hive test.")
@@ -156,9 +156,28 @@ suite("test_hive_topn_lazy_mat", "p0,external,hive,external_docker,external_dock
                 order by a.id,b.id  limit 100;
             """
         }
+
+        for (String table : ["parquet_topn_lazy_complex_table", "parquet_topn_lazy_complex_table_multi_pages"]) {
+            for (int limit : limitValues) {
+                qt_complex_1  """ select * from ${table} order by id asc limit ${limit}; """
+                qt_complex_2  """ select * from ${table} order by col1 desc limit ${limit}; """
+                qt_complex_3  """ select col1,col3,col2 from ${table} order by id desc limit ${limit}; """
+                qt_complex_4  """ select col3,col2 from ${table} order by col1 desc limit ${limit}; """
+
+                qt_complex_5  """ select * from ${table} where id = 1 order by id limit ${limit}; """
+                qt_complex_6  """ select col3,col2 from ${table} where id > 10 order by id limit ${limit}; """
+                qt_complex_7  """ select * from ${table} where id between 5 and 15 order by id limit ${limit}; """
+                qt_complex_8  """ select id, col1 from ${table} where id in (3, 7, 12) order by id limit ${limit}; """
+
+                qt_complex_9  """ select id,col3,col1 from ${table} where col1 = 'text_8' order by id limit ${limit}; """
+                qt_complex_10 """ select col2,id from ${table} where col1 like 'text_1%' order by id limit ${limit}; """
+                qt_complex_11 """ select id, col1 from ${table} where col1 in ('text_2', 'text_10', 'text_20') order by id limit ${limit}; """
+
+                qt_complex_12 """ select * from ${table} where id%2 = 0 order by id limit ${limit}; """
+                qt_complex_13 """ select * from ${table} where id%2 = 1 order by id limit ${limit}; """                
+            }
+        }
     }
-
-
 
     for (String hivePrefix : ["hive2"]) {
         String hms_port = context.config.otherConfigs.get(hivePrefix + "HmsPort")
@@ -191,7 +210,7 @@ suite("test_hive_topn_lazy_mat", "p0,external,hive,external_docker,external_dock
             contains("projectList:[id, name, value, active, score, file_id]")
             contains("column_descs_lists[[`name` text NULL, `value` double NULL, `active` boolean NULL, `score` double NULL, `file_id` int NULL]]")
             contains("locations: [[1, 2, 3, 4, 5]]")
-            contains("table_idxs: [[1, 2, 3, 4, 5]]")
+            contains("column_idxs_lists: [[1, 2, 3, 4, 5]]")
             contains("row_ids: [__DORIS_GLOBAL_ROWID_COL__orc_topn_lazy_mat_table]")
         }
        
@@ -200,7 +219,7 @@ suite("test_hive_topn_lazy_mat", "p0,external,hive,external_docker,external_dock
             contains("projectList:[file_id, id]")
             contains("column_descs_lists[[`id` int NULL, `file_id` int NULL]]")
             contains("locations: [[1, 2]]")
-            contains("table_idxs: [[0, 5]]")
+            contains("column_idxs_lists: [[0, 5]]")
             contains("row_ids: [__DORIS_GLOBAL_ROWID_COL__orc_topn_lazy_mat_table]")
         }
 
@@ -210,7 +229,7 @@ suite("test_hive_topn_lazy_mat", "p0,external,hive,external_docker,external_dock
             contains("projectList:[name, length(a.name), value, id, name, value, active, score, file_id, id, name, value, active, score, file_id]")
             contains("column_descs_lists[[`name` text NULL, `value` double NULL, `active` boolean NULL, `score` double NULL, `file_id` int NULL], [`value` double NULL, `active` boolean NULL, `score` double NULL, `file_id` int NULL]]")
             contains("locations: [[5, 6, 7, 8, 9], [10, 11, 12, 13]]")
-            contains("table_idxs: [[1, 2, 3, 4, 5], [2, 3, 4, 5]]")
+            contains("column_idxs_lists: [[1, 2, 3, 4, 5], [2, 3, 4, 5]]")
             contains("row_ids: [__DORIS_GLOBAL_ROWID_COL__orc_topn_lazy_mat_table, __DORIS_GLOBAL_ROWID_COL__parquet_topn_lazy_mat_table]")
         }
 

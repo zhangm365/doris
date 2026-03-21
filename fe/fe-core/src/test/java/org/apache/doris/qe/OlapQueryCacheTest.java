@@ -26,7 +26,6 @@ import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
-import org.apache.doris.catalog.FunctionSet;
 import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.MaterializedIndex;
 import org.apache.doris.catalog.MaterializedIndex.IndexState;
@@ -56,6 +55,7 @@ import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.planner.OlapScanNode;
 import org.apache.doris.planner.PlanNodeId;
+import org.apache.doris.planner.ScanContext;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.proto.Types;
 import org.apache.doris.qe.cache.Cache;
@@ -88,6 +88,7 @@ import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 
 public class OlapQueryCacheTest {
@@ -146,9 +147,6 @@ public class OlapQueryCacheTest {
                 return env;
             }
         };
-
-        FunctionSet fs = new FunctionSet();
-        Deencapsulation.setField(env, "functionSet", fs);
 
         channel.reset();
 
@@ -377,7 +375,7 @@ public class OlapQueryCacheTest {
         OlapTable table = createProfileTable();
         TupleDescriptor desc = new TupleDescriptor(new TupleId(20004));
         desc.setTable(table);
-        OlapScanNode node = new OlapScanNode(new PlanNodeId(20008), desc, "userprofilenode");
+        OlapScanNode node = new OlapScanNode(new PlanNodeId(20008), desc, "userprofilenode", ScanContext.EMPTY);
         node.setSelectedPartitionIds(selectedPartitionIds);
         return node;
     }
@@ -443,7 +441,7 @@ public class OlapQueryCacheTest {
         String originStmt
                 = "SELECT `eventdate` AS `eventdate`, count(`userid`) AS `__count_1` FROM `testDb`.`appevent` WHERE ((`eventdate` >= '2020-01-12') AND (`eventdate` <= '2020-01-14')) GROUP BY `eventdate`";
         View view = new View(30000L, "view1", null);
-        view.setInlineViewDefWithSqlMode(originStmt, 0L);
+        view.setInlineViewDefWithSessionVariables(originStmt, new HashMap<>());
         view.setNewFullSchema(Lists.newArrayList(
                 new Column("eventdate", ScalarType.DATE),
                 new Column("_count_2", ScalarType.BIGINT)
@@ -454,7 +452,7 @@ public class OlapQueryCacheTest {
     private View createEventView2() {
         String originStmt = "SELECT `eventdate` AS `eventdate`, `userid` AS `userid` FROM `testDb`.`appevent`";
         View view = new View(30001L, "view2", null);
-        view.setInlineViewDefWithSqlMode(originStmt, 0L);
+        view.setInlineViewDefWithSessionVariables(originStmt, new HashMap<>());
         view.setNewFullSchema(Lists.newArrayList(
                 new Column("eventdate", ScalarType.DATE),
                 new Column("userid", ScalarType.INT)
@@ -466,7 +464,7 @@ public class OlapQueryCacheTest {
         String originStmt
                 = "SELECT `eventdate` AS `eventdate`, count(`userid`) AS `count(``userid``)` FROM `testDb`.`appevent` WHERE ((`eventdate` >= '2020-01-12') AND (`eventdate` <= '2020-01-14')) GROUP BY `eventdate`";
         View view = new View(30002L, "view3", null);
-        view.setInlineViewDefWithSqlMode(originStmt, 0L);
+        view.setInlineViewDefWithSessionVariables(originStmt, new HashMap<>());
         view.setNewFullSchema(Lists.newArrayList(
                 new Column("eventdate", ScalarType.DATE),
                 new Column("_count_2", ScalarType.BIGINT)
@@ -478,7 +476,7 @@ public class OlapQueryCacheTest {
         String originStmt = "SELECT `eventdate` AS `eventdate`, count(`userid`) AS `__count_1` FROM `testDb`.`view2` "
                 + "WHERE ((`eventdate` >= '2020-01-12') AND (`eventdate` <= '2020-01-14')) GROUP BY `eventdate`";
         View view = new View(30003L, "view4", null);
-        view.setInlineViewDefWithSqlMode(originStmt, 0L);
+        view.setInlineViewDefWithSessionVariables(originStmt, new HashMap<>());
         view.setNewFullSchema(Lists.newArrayList(
                 new Column("eventdate", ScalarType.DATE),
                 new Column("_count_2", ScalarType.BIGINT)
@@ -490,7 +488,7 @@ public class OlapQueryCacheTest {
         OlapTable table = createEventTable();
         TupleDescriptor desc = new TupleDescriptor(new TupleId(30002));
         desc.setTable(table);
-        OlapScanNode node = new OlapScanNode(new PlanNodeId(30004), desc, "appeventnode");
+        OlapScanNode node = new OlapScanNode(new PlanNodeId(30004), desc, "appeventnode", ScanContext.EMPTY);
         node.setSelectedPartitionIds(selectedPartitionIds);
         return node;
     }

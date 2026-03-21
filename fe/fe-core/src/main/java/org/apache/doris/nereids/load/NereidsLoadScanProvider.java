@@ -17,10 +17,8 @@
 
 package org.apache.doris.nereids.load;
 
-import org.apache.doris.alter.SchemaChangeHandler;
 import org.apache.doris.catalog.AggregateType;
 import org.apache.doris.catalog.Column;
-import org.apache.doris.catalog.FunctionSet;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.Table;
@@ -62,17 +60,19 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * process column mapping expressions, delete conditions and sequence columns
  */
 public class NereidsLoadScanProvider {
     private static final Logger LOG = LogManager.getLogger(NereidsLoadScanProvider.class);
+    private static final String HLL_HASH = "hll_hash";
+    private static final String HLL_FROM_BASE64 = "hll_from_base64";
     private NereidsFileGroupInfo fileGroupInfo;
     private Set<String> partialUpdateInputColumns;
 
@@ -165,16 +165,16 @@ public class NereidsLoadScanProvider {
         //          (k1, k2, tmpk3 = k1 + k2, k3 = k1 + k2)
         //     so "tmpk3 = k1 + k2" is not needed anymore, we can skip it.
         List<NereidsImportColumnDesc> copiedColumnExprs = new ArrayList<>(columnDescs.size());
-        Set<String> constantMappingColumns = new HashSet<>();
+        Set<String> constantMappingColumns = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
         for (NereidsImportColumnDesc importColumnDesc : columnDescs) {
             String mappingColumnName = importColumnDesc.getColumnName();
             if (importColumnDesc.isColumn()) {
                 copiedColumnExprs.add(importColumnDesc);
             } else if (tbl.getColumn(mappingColumnName) != null) {
                 copiedColumnExprs.add(importColumnDesc);
-                // Only track columns with constant expressions (e.g., "k1 = 'constant'")
+                // Only track columns with constant expressions (e.g., k1 = 'constant', k1 = 'uuid()', ...)
                 // Non-constant expressions (e.g., "k1 = k1 + 1") still need to read from file
-                if (importColumnDesc.getExpr().isConstant()) {
+                if (importColumnDesc.getExpr().getInputSlots().isEmpty()) {
                     constantMappingColumns.add(mappingColumnName);
                 }
             }
@@ -315,17 +315,17 @@ public class NereidsLoadScanProvider {
                 // check hll_hash
                 if (column.getDataType() == PrimitiveType.HLL) {
                     if (!(expression instanceof UnboundFunction)) {
-                        throw new AnalysisException("HLL column must use " + FunctionSet.HLL_HASH + " function, like "
-                                + columnName + "=" + FunctionSet.HLL_HASH + "(xxx)");
+                        throw new AnalysisException("HLL column must use " + HLL_HASH + " function, like "
+                                + columnName + "=" + HLL_HASH + "(xxx)");
                     }
                     UnboundFunction function = (UnboundFunction) expression;
                     String functionName = function.getName();
-                    if (!functionName.equalsIgnoreCase(FunctionSet.HLL_HASH)
+                    if (!functionName.equalsIgnoreCase(HLL_HASH)
                             && !functionName.equalsIgnoreCase("hll_empty")
-                            && !functionName.equalsIgnoreCase(FunctionSet.HLL_FROM_BASE64)) {
-                        throw new AnalysisException("HLL column must use " + FunctionSet.HLL_HASH + " function, like "
-                                + columnName + "=" + FunctionSet.HLL_HASH + "(xxx) or "
-                                + columnName + "=" + FunctionSet.HLL_FROM_BASE64 + "(xxx) or "
+                            && !functionName.equalsIgnoreCase(HLL_FROM_BASE64)) {
+                        throw new AnalysisException("HLL column must use " + HLL_HASH + " function, like "
+                                + columnName + "=" + HLL_HASH + "(xxx) or "
+                                + columnName + "=" + HLL_FROM_BASE64 + "(xxx) or "
                                 + columnName + "=hll_empty()");
                     }
                 }
@@ -368,7 +368,10 @@ public class NereidsLoadScanProvider {
                 }
             } else {
                 Column slotColumn;
-                if (fileGroup.getFileFormatProperties().getFileFormatType() == TFileFormatType.FORMAT_ARROW) {
+                TFileFormatType fileFormatType = fileGroup.getFileFormatProperties().getFileFormatType();
+                // Use real column type for arrow/native format, other formats read as varchar first
+                if (fileFormatType == TFileFormatType.FORMAT_ARROW
+                        || fileFormatType == TFileFormatType.FORMAT_NATIVE) {
                     slotColumn = new Column(realColName, colToType.get(realColName), true);
                 } else {
                     if (fileGroupInfo.getUniqueKeyUpdateMode() == TUniqueKeyUpdateMode.UPDATE_FLEXIBLE_COLUMNS
@@ -450,11 +453,11 @@ public class NereidsLoadScanProvider {
             Map<String, Expression> columnExprMap) {
         List<NereidsImportColumnDesc> shadowColumnDescs = Lists.newArrayList();
         for (Column column : tbl.getFullSchema()) {
-            if (!column.isNameWithPrefix(SchemaChangeHandler.SHADOW_NAME_PREFIX)) {
+            if (!column.isNameWithPrefix(Column.SHADOW_NAME_PREFIX)) {
                 continue;
             }
 
-            String originCol = column.getNameWithoutPrefix(SchemaChangeHandler.SHADOW_NAME_PREFIX);
+            String originCol = column.getNameWithoutPrefix(Column.SHADOW_NAME_PREFIX);
             if (columnExprMap.containsKey(originCol)) {
                 Expression mappingExpr = columnExprMap.get(originCol);
                 if (mappingExpr != null) {

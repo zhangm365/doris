@@ -39,6 +39,9 @@ import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProje
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterProjectScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewFilterScanRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitAggregateRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitJoinRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewLimitScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewOnlyScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterAggregateRule;
@@ -47,6 +50,9 @@ import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilt
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectFilterScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewProjectScanRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNAggregateRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNJoinRule;
+import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewTopNScanRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowAggregateRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowJoinRule;
 import org.apache.doris.nereids.rules.exploration.mv.MaterializedViewWindowScanRule;
@@ -77,20 +83,26 @@ import org.apache.doris.nereids.rules.implementation.LogicalJdbcTableSinkToPhysi
 import org.apache.doris.nereids.rules.implementation.LogicalJoinToHashJoin;
 import org.apache.doris.nereids.rules.implementation.LogicalJoinToNestedLoopJoin;
 import org.apache.doris.nereids.rules.implementation.LogicalLimitToPhysicalLimit;
+import org.apache.doris.nereids.rules.implementation.LogicalMaxComputeTableSinkToPhysicalMaxComputeTableSink;
 import org.apache.doris.nereids.rules.implementation.LogicalOdbcScanToPhysicalOdbcScan;
 import org.apache.doris.nereids.rules.implementation.LogicalOlapScanToPhysicalOlapScan;
 import org.apache.doris.nereids.rules.implementation.LogicalOlapTableSinkToPhysicalOlapTableSink;
 import org.apache.doris.nereids.rules.implementation.LogicalOneRowRelationToPhysicalOneRowRelation;
 import org.apache.doris.nereids.rules.implementation.LogicalPartitionTopNToPhysicalPartitionTopN;
 import org.apache.doris.nereids.rules.implementation.LogicalProjectToPhysicalProject;
+import org.apache.doris.nereids.rules.implementation.LogicalRecursiveUnionAnchorToPhysicalRecursiveUnionAnchor;
+import org.apache.doris.nereids.rules.implementation.LogicalRecursiveUnionProducerToPhysicalRecursiveUnionProducer;
+import org.apache.doris.nereids.rules.implementation.LogicalRecursiveUnionToPhysicalRecursiveUnion;
 import org.apache.doris.nereids.rules.implementation.LogicalRepeatToPhysicalRepeat;
 import org.apache.doris.nereids.rules.implementation.LogicalResultSinkToPhysicalResultSink;
 import org.apache.doris.nereids.rules.implementation.LogicalSchemaScanToPhysicalSchemaScan;
 import org.apache.doris.nereids.rules.implementation.LogicalSortToPhysicalQuickSort;
 import org.apache.doris.nereids.rules.implementation.LogicalTVFRelationToPhysicalTVFRelation;
+import org.apache.doris.nereids.rules.implementation.LogicalTVFTableSinkToPhysicalTVFTableSink;
 import org.apache.doris.nereids.rules.implementation.LogicalTopNToPhysicalTopN;
 import org.apache.doris.nereids.rules.implementation.LogicalUnionToPhysicalUnion;
 import org.apache.doris.nereids.rules.implementation.LogicalWindowToPhysicalWindow;
+import org.apache.doris.nereids.rules.implementation.LogicalWorkTableReferenceToPhysicalWorkTableReference;
 import org.apache.doris.nereids.rules.implementation.SplitAggMultiPhase;
 import org.apache.doris.nereids.rules.implementation.SplitAggMultiPhaseWithoutGbyKey;
 import org.apache.doris.nereids.rules.implementation.SplitAggWithoutDistinct;
@@ -118,6 +130,7 @@ import org.apache.doris.nereids.rules.rewrite.PushDownFilterThroughSort;
 import org.apache.doris.nereids.rules.rewrite.PushDownFilterThroughWindow;
 import org.apache.doris.nereids.rules.rewrite.PushDownJoinOtherCondition;
 import org.apache.doris.nereids.rules.rewrite.PushDownLimitDistinctThroughJoin;
+import org.apache.doris.nereids.rules.rewrite.PushDownProject;
 import org.apache.doris.nereids.rules.rewrite.PushDownProjectThroughLimit;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNDistinctThroughJoin;
 import org.apache.doris.nereids.rules.rewrite.PushDownTopNThroughJoin;
@@ -169,6 +182,7 @@ public class RuleSet {
             new PushDownFilterThroughSetOperation(),
             new PushDownFilterThroughGenerate(),
             new PushDownProjectThroughLimit(),
+            new PushDownProject(),
             new EliminateOuterJoin(),
             new MergeProjectable(),
             new MergeFilters(),
@@ -197,6 +211,7 @@ public class RuleSet {
             .add(new LogicalJdbcScanToPhysicalJdbcScan())
             .add(new LogicalOdbcScanToPhysicalOdbcScan())
             .add(new LogicalEsScanToPhysicalEsScan())
+            .add(new LogicalWorkTableReferenceToPhysicalWorkTableReference())
             .add(new LogicalProjectToPhysicalProject())
             .add(new LogicalLimitToPhysicalLimit())
             .add(new LogicalWindowToPhysicalWindow())
@@ -212,6 +227,9 @@ public class RuleSet {
             .add(SplitAggWithoutDistinct.INSTANCE)
             .add(SplitAggMultiPhase.INSTANCE)
             .add(SplitAggMultiPhaseWithoutGbyKey.INSTANCE)
+            .add(new LogicalRecursiveUnionToPhysicalRecursiveUnion())
+            .add(new LogicalRecursiveUnionProducerToPhysicalRecursiveUnionProducer())
+            .add(new LogicalRecursiveUnionAnchorToPhysicalRecursiveUnionAnchor())
             .add(new LogicalUnionToPhysicalUnion())
             .add(new LogicalExceptToPhysicalExcept())
             .add(new LogicalIntersectToPhysicalIntersect())
@@ -219,12 +237,14 @@ public class RuleSet {
             .add(new LogicalOlapTableSinkToPhysicalOlapTableSink())
             .add(new LogicalHiveTableSinkToPhysicalHiveTableSink())
             .add(new LogicalIcebergTableSinkToPhysicalIcebergTableSink())
+            .add(new LogicalMaxComputeTableSinkToPhysicalMaxComputeTableSink())
             .add(new LogicalJdbcTableSinkToPhysicalJdbcTableSink())
             .add(new LogicalFileSinkToPhysicalFileSink())
             .add(new LogicalResultSinkToPhysicalResultSink())
             .add(new LogicalDeferMaterializeResultSinkToPhysicalDeferMaterializeResultSink())
             .add(new LogicalDictionarySinkToPhysicalDictionarySink())
             .add(new LogicalBlackholeSinkToPhysicalBlackholeSink())
+            .add(new LogicalTVFTableSinkToPhysicalTVFTableSink())
             .build();
 
     // left-zig-zag tree is used when column stats are not available.
@@ -273,6 +293,12 @@ public class RuleSet {
             .add(MaterializedViewProjectFilterScanRule.INSTANCE)
             .add(MaterializedViewAggregateOnNoneAggregateRule.INSTANCE)
             .add(MaterializedViewOnlyScanRule.INSTANCE)
+            .add(MaterializedViewLimitScanRule.INSTANCE)
+            .add(MaterializedViewLimitJoinRule.INSTANCE)
+            .add(MaterializedViewLimitAggregateRule.INSTANCE)
+            .add(MaterializedViewTopNAggregateRule.INSTANCE)
+            .add(MaterializedViewTopNJoinRule.INSTANCE)
+            .add(MaterializedViewTopNScanRule.INSTANCE)
             .add(MaterializedViewWindowScanRule.INSTANCE)
             .add(MaterializedViewWindowJoinRule.INSTANCE)
             .add(MaterializedViewWindowAggregateRule.INSTANCE)

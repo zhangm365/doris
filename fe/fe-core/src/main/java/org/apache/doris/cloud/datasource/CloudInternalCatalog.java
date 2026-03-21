@@ -37,11 +37,13 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.catalog.ReplicaAllocation;
+import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.catalog.CloudReplica;
+import org.apache.doris.cloud.catalog.CloudTablet;
 import org.apache.doris.cloud.persist.UpdateCloudReplicaInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.CopyJobPB;
@@ -51,10 +53,10 @@ import org.apache.doris.cloud.proto.Cloud.ObjectFilePB;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.storage.ObjectFile;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.MetaNotFoundException;
+import org.apache.doris.common.util.ColumnsUtil;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.proto.OlapCommon;
 import org.apache.doris.proto.OlapFile;
@@ -62,9 +64,11 @@ import org.apache.doris.proto.OlapFile.EncryptionAlgorithmPB;
 import org.apache.doris.proto.Types;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.rpc.RpcException;
+import org.apache.doris.service.FrontendOptions;
 import org.apache.doris.thrift.TCompressionType;
 import org.apache.doris.thrift.TInvertedIndexFileStorageFormat;
 import org.apache.doris.thrift.TSortType;
+import org.apache.doris.thrift.TStorageFormat;
 import org.apache.doris.thrift.TTabletType;
 
 import com.google.common.base.Preconditions;
@@ -72,7 +76,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import doris.segment_v2.SegmentV2;
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -165,13 +169,15 @@ public class CloudInternalCatalog extends InternalCatalog {
                 clusterKeyUids = OlapTable.getClusterKeyUids(columns);
             }
             Cloud.CreateTabletsRequest.Builder requestBuilder = Cloud.CreateTabletsRequest.newBuilder();
+            requestBuilder.setRequestIp(FrontendOptions.getLocalHostAddressCached());
             List<String> rowStoreColumns =
                     tbl.getTableProperty().getCopiedRowStoreColumns();
             for (Tablet tablet : index.getTablets()) {
                 OlapFile.TabletMetaCloudPB.Builder builder = createTabletMetaBuilder(tbl.getId(), indexId,
                         partitionId, tablet, tabletType, schemaHash, keysType, shortKeyColumnCount,
                         bfColumns, tbl.getBfFpp(), indexes, columns, tbl.getDataSortInfo(),
-                        tbl.getCompressionType(), storagePolicy, isInMemory, false, tbl.getName(), tbl.getTTLSeconds(),
+                        tbl.getCompressionType(), tbl.getStorageFormat(), storagePolicy, isInMemory, false,
+                        tbl.getName(), tbl.getTTLSeconds(),
                         tbl.getEnableUniqueKeyMergeOnWrite(), tbl.storeRowColumn(), indexMeta.getSchemaVersion(),
                         tbl.getCompactionPolicy(), tbl.getTimeSeriesCompactionGoalSizeMbytes(),
                         tbl.getTimeSeriesCompactionFileCountThreshold(),
@@ -184,7 +190,9 @@ public class CloudInternalCatalog extends InternalCatalog {
                         tbl.rowStorePageSize(),
                         tbl.variantEnableFlattenNested(), clusterKeyUids,
                         tbl.storagePageSize(), tbl.getTDEAlgorithmPB(),
-                        tbl.storageDictPageSize(), true);
+                        tbl.storageDictPageSize(), true,
+                        tbl.getColumnSeqMapping(),
+                                    tbl.getVerticalCompactionNumColumnsPerGroup());
                 requestBuilder.addTabletMetas(builder);
             }
             requestBuilder.setDbId(dbId);
@@ -208,7 +216,7 @@ public class CloudInternalCatalog extends InternalCatalog {
             long partitionId, Tablet tablet, TTabletType tabletType, int schemaHash, KeysType keysType,
             short shortKeyColumnCount, Set<String> bfColumns, double bfFpp, List<Index> indexes,
             List<Column> schemaColumns, DataSortInfo dataSortInfo, TCompressionType compressionType,
-            String storagePolicy, boolean isInMemory, boolean isShadow,
+            TStorageFormat storageFormat, String storagePolicy, boolean isInMemory, boolean isShadow,
             String tableName, long ttlSeconds, boolean enableUniqueKeyMergeOnWrite,
             boolean storeRowColumn, int schemaVersion, String compactionPolicy,
             Long timeSeriesCompactionGoalSizeMbytes, Long timeSeriesCompactionFileCountThreshold,
@@ -218,7 +226,8 @@ public class CloudInternalCatalog extends InternalCatalog {
             TInvertedIndexFileStorageFormat invertedIndexFileStorageFormat, long pageSize,
             boolean variantEnableFlattenNested, List<Integer> clusterKeyUids,
             long storagePageSize, EncryptionAlgorithmPB encryptionAlgorithm, long storageDictPageSize,
-            boolean createInitialRowset) throws DdlException {
+            boolean createInitialRowset, Map<String, List<String>> columnSeqMapping,
+            int verticalCompactionNumColumnsPerGroup) throws DdlException {
         OlapFile.TabletMetaCloudPB.Builder builder = OlapFile.TabletMetaCloudPB.newBuilder();
         builder.setTableId(tableId);
         builder.setIndexId(indexId);
@@ -253,6 +262,7 @@ public class CloudInternalCatalog extends InternalCatalog {
         builder.setTimeSeriesCompactionTimeThresholdSeconds(timeSeriesCompactionTimeThresholdSeconds);
         builder.setTimeSeriesCompactionEmptyRowsetsThreshold(timeSeriesCompactionEmptyRowsetsThreshold);
         builder.setTimeSeriesCompactionLevelThreshold(timeSeriesCompactionLevelThreshold);
+        builder.setVerticalCompactionNumColumnsPerGroup(verticalCompactionNumColumnsPerGroup);
 
         OlapFile.TabletSchemaCloudPB.Builder schemaBuilder = OlapFile.TabletSchemaCloudPB.newBuilder();
         schemaBuilder.setSchemaVersion(schemaVersion);
@@ -319,6 +329,18 @@ public class CloudInternalCatalog extends InternalCatalog {
                 break;
         }
 
+        // Enable external column meta layout when storage_format is V3 (Cloud mode).
+        switch (storageFormat) {
+            case V3:
+                schemaBuilder.setIsExternalSegmentColumnMetaUsed(true);
+                schemaBuilder.setIntegerTypeDefaultUsePlainEncoding(true);
+                schemaBuilder.setBinaryPlainEncodingDefaultImpl(
+                        OlapFile.BinaryPlainEncodingTypePB.BINARY_PLAIN_ENCODING_V2);
+                break;
+            default:
+                break;
+        }
+
         schemaBuilder.setSortColNum(dataSortInfo.getColNum());
         for (int i = 0; i < schemaColumns.size(); i++) {
             Column column = schemaColumns.get(i);
@@ -366,6 +388,18 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (!CollectionUtils.isEmpty(clusterKeyUids)) {
             schemaBuilder.addAllClusterKeyUids(clusterKeyUids);
         }
+        OlapFile.ColumnGroupsPB.Builder columnGroupsBuilder = OlapFile.ColumnGroupsPB.newBuilder();
+        if (columnSeqMapping != null && !columnSeqMapping.isEmpty()) {
+            ColumnsUtil columnsUtil = new ColumnsUtil(schemaColumns);
+            for (Map.Entry<String, List<String>> entry : columnSeqMapping.entrySet()) {
+                int sequenceColumnId = columnsUtil.getColumnUniqueId(entry.getKey());
+                List<Integer> columnId = columnsUtil.getColumnUniqueId(entry.getValue());
+                OlapFile.ColumnGroupPB.Builder cgBuilder = columnGroupsBuilder.addCgBuilder();
+                cgBuilder.setSequenceColumn(sequenceColumnId);
+                cgBuilder.addAllColumnsInGroup(columnId);
+            }
+        }
+        schemaBuilder.setSeqMap(columnGroupsBuilder.build());
 
         OlapFile.TabletSchemaCloudPB schema = schemaBuilder.build();
         builder.setSchema(schema);
@@ -437,24 +471,49 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
+    /**
+     * Commit partition creation to MetaService.
+     *
+     * @param partitionIds  Partition IDs to commit
+     * @param indexIds      Index IDs to commit
+     * @param isCreateTable Whether this is part of table creation
+     * @param isBatchCommit If true, use commitMaterializedIndex (commit_index RPC)
+     *                      to batch commit all partitions
+     *                      and indexes in one MetaService call for better
+     *                      performance;
+     *                      If false, use commitPartition (commit_partition RPC) to
+     *                      commit partitions separately
+     * @throws DdlException If commit to MetaService fails
+     */
     @Override
     public void afterCreatePartitions(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds,
-                                         boolean isCreateTable)
+            boolean isCreateTable, boolean isBatchCommit, OlapTable olapTable)
             throws DdlException {
-        if (partitionIds == null) {
-            commitMaterializedIndex(dbId, tableId, indexIds, isCreateTable);
+        if (isBatchCommit) {
+            long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
+            if (olapTable != null && isCreateTable && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
+                        .pushVersionAsync(dbId, olapTable, tableVersion);
+            }
         } else {
-            commitPartition(dbId, tableId, partitionIds, indexIds);
+            long tableVersion = commitPartition(dbId, tableId, partitionIds, indexIds);
+            if (olapTable != null && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
+                        .pushVersionAsync(dbId, olapTable, tableVersion);
+            }
         }
         if (!Config.check_create_table_recycle_key_remained) {
             return;
         }
-        checkCreatePartitions(dbId, tableId, partitionIds, indexIds);
+        checkCreatePartitions(dbId, tableId, partitionIds, indexIds, isBatchCommit);
     }
 
-    private void checkCreatePartitions(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
+    private void checkCreatePartitions(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds,
+            boolean isBatchCommit)
             throws DdlException {
-        if (partitionIds == null) {
+        if (isBatchCommit) {
             checkMaterializedIndex(dbId, tableId, indexIds);
         } else {
             checkPartition(dbId, tableId, partitionIds);
@@ -469,7 +528,8 @@ public class CloudInternalCatalog extends InternalCatalog {
             return;
         }
 
-        Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder();
+        Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         partitionRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         partitionRequestBuilder.setTableId(tableId);
         partitionRequestBuilder.addAllPartitionIds(partitionIds);
@@ -507,19 +567,25 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
+    /**
+     * @return table version if returned by MetaService, otherwise return 0
+     */
+    public long commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing partitions in check compatibility mode");
-            return;
+            return 0;
         }
 
-        Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder();
+        Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         partitionRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
-        partitionRequestBuilder.addAllPartitionIds(partitionIds);
         partitionRequestBuilder.addAllIndexIds(indexIds);
         partitionRequestBuilder.setDbId(dbId);
         partitionRequestBuilder.setTableId(tableId);
+        if (partitionIds != null) {
+            partitionRequestBuilder.addAllPartitionIds(partitionIds);
+        }
         final Cloud.PartitionRequest partitionRequest = partitionRequestBuilder.build();
 
         Cloud.PartitionResponse response = null;
@@ -543,6 +609,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     // if `expiration` = 0, recycler will delete uncommitted indexes in `retention_seconds`
@@ -552,7 +622,8 @@ public class CloudInternalCatalog extends InternalCatalog {
             return;
         }
 
-        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder();
+        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         indexRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         indexRequestBuilder.addAllIndexIds(indexIds);
         indexRequestBuilder.setTableId(tableId);
@@ -582,19 +653,29 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, boolean isCreateTable)
+    /**
+     * @return table version if returned by MetaService, otherwise return 0
+     */
+    public long commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
+            boolean isCreateTable)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing materialized index in checking compatibility mode");
-            return;
+            return 0;
         }
 
-        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder();
+        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         indexRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         indexRequestBuilder.addAllIndexIds(indexIds);
         indexRequestBuilder.setDbId(dbId);
         indexRequestBuilder.setTableId(tableId);
         indexRequestBuilder.setIsNewTable(isCreateTable);
+        if (partitionIds != null) {
+            indexRequestBuilder.addAllPartitionIds(partitionIds);
+        }
+        LOG.debug("committing materialized index for tableId: {}, partitionIds: {}, indexIds: {}",
+                tableId, partitionIds, indexIds);
         final Cloud.IndexRequest indexRequest = indexRequestBuilder.build();
 
         Cloud.IndexResponse response = null;
@@ -618,6 +699,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitIndex response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (isCreateTable && response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     private void checkPartition(long dbId, long tableId, List<Long> partitionIds)
@@ -633,7 +718,8 @@ public class CloudInternalCatalog extends InternalCatalog {
         checkKeyInfosBuilder.addDbIds(dbId);
         checkKeyInfosBuilder.addTableIds(tableId);
 
-        Cloud.CheckKVRequest.Builder checkKvRequestBuilder = Cloud.CheckKVRequest.newBuilder();
+        Cloud.CheckKVRequest.Builder checkKvRequestBuilder = Cloud.CheckKVRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         checkKvRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         checkKvRequestBuilder.setCheckKeys(checkKeyInfosBuilder.build());
         checkKvRequestBuilder.setOp(Cloud.CheckKVRequest.Operation.CREATE_PARTITION_AFTER_FE_COMMIT);
@@ -673,7 +759,8 @@ public class CloudInternalCatalog extends InternalCatalog {
         checkKeyInfosBuilder.addDbIds(dbId);
         checkKeyInfosBuilder.addTableIds(tableId);
 
-        Cloud.CheckKVRequest.Builder checkKvRequestBuilder = Cloud.CheckKVRequest.newBuilder();
+        Cloud.CheckKVRequest.Builder checkKvRequestBuilder = Cloud.CheckKVRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         checkKvRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         checkKvRequestBuilder.setCheckKeys(checkKeyInfosBuilder.build());
         checkKvRequestBuilder.setOp(Cloud.CheckKVRequest.Operation.CREATE_INDEX_AFTER_FE_COMMIT);
@@ -737,7 +824,7 @@ public class CloudInternalCatalog extends InternalCatalog {
     // BEGIN DROP TABLE
 
     @Override
-    public void eraseTableDropBackendReplicas(OlapTable olapTable, boolean isReplay) {
+    public void eraseTableDropBackendReplicas(long dbId, OlapTable olapTable, boolean isReplay) {
         if (!Env.getCurrentEnv().isMaster()) {
             return;
         }
@@ -763,7 +850,7 @@ public class CloudInternalCatalog extends InternalCatalog {
                 if (indexs.isEmpty()) {
                     break;
                 }
-                dropMaterializedIndex(olapTable.getId(), indexs, true);
+                dropMaterializedIndex(dbId, olapTable.getId(), indexs, true);
             } catch (Exception e) {
                 LOG.warn("failed to drop index {} of table {}, try cnt {}, execption {}",
                         indexs, olapTable.getId(), tryCnt, e);
@@ -792,7 +879,7 @@ public class CloudInternalCatalog extends InternalCatalog {
             for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.ALL)) {
                 indexIds.add(index.getId());
                 if (tableId == -1) {
-                    tableId = ((CloudReplica) index.getTablets().get(0).getReplicas().get(0)).getTableId();
+                    tableId = ((CloudTablet) index.getTablets().get(0)).getCloudReplica().getTableId();
                 }
             }
             partitionIds.add(partition.getId());
@@ -836,7 +923,7 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
 
         Cloud.PartitionRequest.Builder partitionRequestBuilder =
-                Cloud.PartitionRequest.newBuilder();
+                Cloud.PartitionRequest.newBuilder().setRequestIp(FrontendOptions.getLocalHostAddressCached());
         partitionRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         partitionRequestBuilder.setTableId(tableId);
         partitionRequestBuilder.addAllPartitionIds(partitionIds);
@@ -867,13 +954,27 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
             LOG.warn("dropPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
+        } else if (needUpdateTableVersion && response.hasTableVersion() && response.getTableVersion() > 0) {
+            Database db = Env.getCurrentInternalCatalog().getDbNullable(dbId);
+            if (db == null) {
+                return;
+            }
+            Table table = db.getTableNullable(tableId);
+            if (table != null && table instanceof OlapTable) {
+                OlapTable olapTable = (OlapTable) table;
+                long tableVersion = response.getTableVersion();
+                olapTable.setCachedTableVersion(tableVersion);
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
+                        .pushVersionAsync(dbId, olapTable, tableVersion);
+            }
         }
     }
 
     public void removeSchemaChangeJob(long jobId, long dbId, long tableId, long indexId, long newIndexId,
             long partitionId, long tabletId, long newTabletId)
             throws DdlException {
-        Cloud.FinishTabletJobRequest.Builder finishTabletJobRequestBuilder = Cloud.FinishTabletJobRequest.newBuilder();
+        Cloud.FinishTabletJobRequest.Builder finishTabletJobRequestBuilder =
+                Cloud.FinishTabletJobRequest.newBuilder().setRequestIp(FrontendOptions.getLocalHostAddressCached());
         finishTabletJobRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         finishTabletJobRequestBuilder.setAction(Cloud.FinishTabletJobRequest.Action.ABORT);
         Cloud.TabletJobInfoPB.Builder tabletJobInfoPBBuilder = Cloud.TabletJobInfoPB.newBuilder();
@@ -932,16 +1033,19 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void dropMaterializedIndex(long tableId, List<Long> indexIds, boolean dropTable) throws DdlException {
+    public void dropMaterializedIndex(long dbId, long tableId, List<Long> indexIds, boolean dropTable)
+            throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip dropping materialized index in compatibility checking mode");
             return;
         }
 
-        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder();
+        Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder()
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         indexRequestBuilder.setCloudUniqueId(Config.cloud_unique_id);
         indexRequestBuilder.addAllIndexIds(indexIds);
         indexRequestBuilder.setTableId(tableId);
+        indexRequestBuilder.setDbId(dbId);
         final Cloud.IndexRequest indexRequest = indexRequestBuilder.build();
 
         Cloud.IndexResponse response = null;
@@ -972,7 +1076,7 @@ public class CloudInternalCatalog extends InternalCatalog {
      * @param tableId
      * @param indexIdList
      */
-    public void eraseDroppedIndex(long tableId, List<Long> indexIdList) {
+    public void eraseDroppedIndex(long dbId, long tableId, List<Long> indexIdList) {
         if (indexIdList == null || indexIdList.size() == 0) {
             LOG.warn("indexIdList is empty");
             return;
@@ -986,7 +1090,7 @@ public class CloudInternalCatalog extends InternalCatalog {
             }
 
             try {
-                dropMaterializedIndex(tableId, indexIdList, false);
+                dropMaterializedIndex(dbId, tableId, indexIdList, false);
                 break;
             } catch (Exception e) {
                 LOG.warn("tryCnt:{}, eraseDroppedIndex exception:", tryCnt, e);
@@ -1074,7 +1178,7 @@ public class CloudInternalCatalog extends InternalCatalog {
                     Tablet tablet = materializedIndex.getTablet(tabletIds.get(i));
                     Replica replica;
                     if (info.getReplicaIds().isEmpty()) {
-                        replica = tablet.getReplicas().get(0);
+                        replica = ((CloudTablet) tablet).getCloudReplica();
                     } else {
                         replica = tablet.getReplicaById(info.getReplicaIds().get(i));
                     }
@@ -1105,7 +1209,10 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
 
         Cloud.CreateStageRequest createStageRequest = Cloud.CreateStageRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setStage(stagePB).build();
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setStage(stagePB)
+                .build();
         Cloud.CreateStageResponse response = null;
         int retryTime = 0;
         while (retryTime++ < 3) {
@@ -1163,8 +1270,7 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (response.getStatus().getCode() == MetaServiceCode.STATE_ALREADY_EXISTED_FOR_USER
                 || response.getStatus().getCode() == MetaServiceCode.STAGE_NOT_FOUND) {
             Cloud.StagePB.Builder createStageBuilder = Cloud.StagePB.newBuilder();
-            createStageBuilder.addMysqlUserName(ClusterNamespace
-                    .getNameFromFullName(ConnectContext.get().getCurrentUserIdentity().getQualifiedUser()))
+            createStageBuilder.addMysqlUserName(ConnectContext.get().getCurrentUserIdentity().getQualifiedUser())
                 .setStageId(UUID.randomUUID().toString())
                 .setType(Cloud.StagePB.StageType.INTERNAL).addMysqlUserId(userId);
 
@@ -1211,7 +1317,9 @@ public class CloudInternalCatalog extends InternalCatalog {
     private Cloud.GetStageResponse getStageRpc(Cloud.StagePB.StageType stageType, String userName,
                                                       String stageName, String userId) throws DdlException {
         Cloud.GetStageRequest.Builder builder = Cloud.GetStageRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setType(stageType);
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setType(stageType);
         if (userName != null) {
             builder.setMysqlUserName(userName);
         }
@@ -1243,7 +1351,9 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
 
         Cloud.DropStageRequest.Builder builder = Cloud.DropStageRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setType(stageType);
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setType(stageType);
         if (userName != null) {
             builder.setMysqlUserName(userName);
         }
@@ -1304,6 +1414,7 @@ public class CloudInternalCatalog extends InternalCatalog {
                                         long sizeLimit, int fileNumLimit, int fileMetaSizeLimit) throws DdlException {
         Cloud.BeginCopyRequest request = Cloud.BeginCopyRequest.newBuilder()
                 .setCloudUniqueId(Config.cloud_unique_id).setStageId(stageId).setStageType(stageType)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
                 .setTableId(tableId).setCopyId(copyJobId).setGroupId(groupId).setStartTimeMs(startTime)
                 .setTimeoutTimeMs(timeoutTime).addAllObjectFiles(objectFiles).setFileNumLimit(fileNumLimit)
                 .setFileSizeLimit(sizeLimit).setFileMetaSizeLimit(fileMetaSizeLimit).build();
@@ -1333,7 +1444,8 @@ public class CloudInternalCatalog extends InternalCatalog {
 
     public Cloud.GetIamResponse getIam() throws DdlException {
         Cloud.GetIamRequest.Builder builder = Cloud.GetIamRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id);
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached());
         Cloud.GetIamResponse response = null;
         try {
             response = MetaServiceProxy.getInstance().getIam(builder.build());
@@ -1348,6 +1460,7 @@ public class CloudInternalCatalog extends InternalCatalog {
                            int groupId, Action action) throws DdlException {
         Cloud.FinishCopyRequest request = Cloud.FinishCopyRequest.newBuilder()
                 .setCloudUniqueId(Config.cloud_unique_id).setStageId(stageId).setStageType(stageType)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
                 .setTableId(tableId).setCopyId(copyJobId).setGroupId(groupId)
                 .setAction(action).setFinishTimeMs(System.currentTimeMillis()).build();
         Cloud.FinishCopyResponse response = null;
@@ -1385,7 +1498,9 @@ public class CloudInternalCatalog extends InternalCatalog {
 
     public CopyJobPB getCopyJob(String stageId, long tableId, String copyJobId, int groupId) throws DdlException {
         Cloud.GetCopyJobRequest request = Cloud.GetCopyJobRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setStageId(stageId).setTableId(tableId).setCopyId(copyJobId)
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setStageId(stageId).setTableId(tableId).setCopyId(copyJobId)
                 .setGroupId(groupId).build();
         Cloud.GetCopyJobResponse response = null;
         try {
@@ -1403,7 +1518,9 @@ public class CloudInternalCatalog extends InternalCatalog {
 
     public List<ObjectFilePB> getCopyFiles(String stageId, long tableId) throws DdlException {
         Cloud.GetCopyFilesRequest.Builder builder = Cloud.GetCopyFilesRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setStageId(stageId).setTableId(tableId);
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setStageId(stageId).setTableId(tableId);
         Cloud.GetCopyFilesResponse response = null;
         try {
             response = MetaServiceProxy.getInstance().getCopyFiles(builder.build());
@@ -1421,7 +1538,9 @@ public class CloudInternalCatalog extends InternalCatalog {
     public List<ObjectFilePB> filterCopyFiles(String stageId, long tableId, List<ObjectFile> objectFiles)
             throws DdlException {
         Cloud.FilterCopyFilesRequest.Builder builder = Cloud.FilterCopyFilesRequest.newBuilder()
-                .setCloudUniqueId(Config.cloud_unique_id).setStageId(stageId).setTableId(tableId);
+                .setCloudUniqueId(Config.cloud_unique_id)
+                .setRequestIp(FrontendOptions.getLocalHostAddressCached())
+                .setStageId(stageId).setTableId(tableId);
         for (ObjectFile objectFile : objectFiles) {
             builder.addObjectFiles(
                     ObjectFilePB.newBuilder().setRelativePath(objectFile.getRelativePath())

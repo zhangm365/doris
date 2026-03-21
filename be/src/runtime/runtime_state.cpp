@@ -35,22 +35,21 @@
 #include "common/logging.h"
 #include "common/object_pool.h"
 #include "common/status.h"
+#include "core/value/vdatetime_value.h"
+#include "exec/operator/operator.h"
+#include "exec/pipeline/pipeline_task.h"
+#include "exec/runtime_filter/runtime_filter_mgr.h"
 #include "io/fs/s3_file_system.h"
-#include "olap/id_manager.h"
-#include "olap/storage_engine.h"
-#include "pipeline/exec/operator.h"
-#include "pipeline/pipeline_task.h"
+#include "load/load_path_mgr.h"
 #include "runtime/exec_env.h"
 #include "runtime/fragment_mgr.h"
-#include "runtime/load_path_mgr.h"
 #include "runtime/memory/mem_tracker_limiter.h"
-#include "runtime/memory/thread_mem_tracker_mgr.h"
 #include "runtime/query_context.h"
 #include "runtime/thread_context.h"
-#include "runtime_filter/runtime_filter_mgr.h"
+#include "storage/id_manager.h"
+#include "storage/storage_engine.h"
 #include "util/timezone_utils.h"
 #include "util/uid_util.h"
-#include "vec/runtime/vdatetime_value.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
@@ -106,7 +105,7 @@ RuntimeState::RuntimeState(const TUniqueId& instance_id, const TUniqueId& query_
 RuntimeState::RuntimeState(const TUniqueId& query_id, int32_t fragment_id,
                            const TQueryOptions& query_options, const TQueryGlobals& query_globals,
                            ExecEnv* exec_env, QueryContext* ctx)
-        : _profile("PipelineX  " + std::to_string(fragment_id)),
+        : _profile(fmt::format("PipelineX(fragment_id={})", fragment_id)),
           _load_channel_profile("<unnamed>"),
           _obj_pool(new ObjectPool()),
           _unreported_error_idx(0),
@@ -131,7 +130,7 @@ RuntimeState::RuntimeState(const TUniqueId& query_id, int32_t fragment_id,
                            const TQueryOptions& query_options, const TQueryGlobals& query_globals,
                            ExecEnv* exec_env,
                            const std::shared_ptr<MemTrackerLimiter>& query_mem_tracker)
-        : _profile("PipelineX  " + std::to_string(fragment_id)),
+        : _profile(fmt::format("PipelineX(fragment_id={})", fragment_id)),
           _load_channel_profile("<unnamed>"),
           _obj_pool(new ObjectPool()),
           _unreported_error_idx(0),
@@ -151,37 +150,16 @@ RuntimeState::RuntimeState(const TUniqueId& query_id, int32_t fragment_id,
     DCHECK(_query_mem_tracker != nullptr);
 }
 
-RuntimeState::RuntimeState(const TQueryGlobals& query_globals)
+RuntimeState::RuntimeState(const TQueryOptions& query_options, const TQueryGlobals& query_globals)
         : _profile("<unnamed>"),
           _load_channel_profile("<unnamed>"),
           _obj_pool(new ObjectPool()),
           _unreported_error_idx(0),
           _per_fragment_instance_idx(0) {
-    _query_options.batch_size = DEFAULT_BATCH_SIZE;
-    if (query_globals.__isset.time_zone && query_globals.__isset.nano_seconds) {
-        _timezone = query_globals.time_zone;
-        _timestamp_ms = query_globals.timestamp_ms;
-        _nano_seconds = query_globals.nano_seconds;
-    } else if (query_globals.__isset.time_zone) {
-        _timezone = query_globals.time_zone;
-        _timestamp_ms = query_globals.timestamp_ms;
-        _nano_seconds = 0;
-    } else if (!query_globals.now_string.empty()) {
-        _timezone = TimezoneUtils::default_time_zone;
-        VecDateTimeValue dt;
-        dt.from_date_str(query_globals.now_string.c_str(), query_globals.now_string.size());
-        int64_t timestamp;
-        dt.unix_timestamp(&timestamp, _timezone);
-        _timestamp_ms = timestamp * 1000;
-        _nano_seconds = 0;
-    } else {
-        //Unit test may set into here
-        _timezone = TimezoneUtils::default_time_zone;
-        _timestamp_ms = 0;
-        _nano_seconds = 0;
-    }
-    TimezoneUtils::find_cctz_time_zone(_timezone, _timezone_obj);
+    Status status = init(TUniqueId(), query_options, query_globals, nullptr);
+    _exec_env = ExecEnv::GetInstance();
     init_mem_trackers("<unnamed>");
+    DCHECK(status.ok());
 }
 
 RuntimeState::RuntimeState()
@@ -436,8 +414,8 @@ void RuntimeState::resize_op_id_to_local_state(int operator_size) {
     _op_id_to_local_state.resize(-operator_size);
 }
 
-void RuntimeState::emplace_local_state(
-        int id, std::unique_ptr<doris::pipeline::PipelineXLocalStateBase> state) {
+void RuntimeState::emplace_local_state(int id,
+                                       std::unique_ptr<doris::PipelineXLocalStateBase> state) {
     id = -id;
     DCHECK_LT(id, _op_id_to_local_state.size())
             << state->parent()->get_name() << " node id = " << state->parent()->node_id();
@@ -445,7 +423,7 @@ void RuntimeState::emplace_local_state(
     _op_id_to_local_state[id] = std::move(state);
 }
 
-doris::pipeline::PipelineXLocalStateBase* RuntimeState::get_local_state(int id) {
+doris::PipelineXLocalStateBase* RuntimeState::get_local_state(int id) {
     DCHECK_GT(_op_id_to_local_state.size(), -id);
     return _op_id_to_local_state[-id].get();
 }
@@ -463,12 +441,12 @@ Result<RuntimeState::LocalState*> RuntimeState::get_local_state_result(int id) {
 };
 
 void RuntimeState::emplace_sink_local_state(
-        int id, std::unique_ptr<doris::pipeline::PipelineXSinkLocalStateBase> state) {
+        int id, std::unique_ptr<doris::PipelineXSinkLocalStateBase> state) {
     DCHECK(!_sink_local_state) << " id=" << id << " state: " << state->debug_string(0);
     _sink_local_state = std::move(state);
 }
 
-doris::pipeline::PipelineXSinkLocalStateBase* RuntimeState::get_sink_local_state() {
+doris::PipelineXSinkLocalStateBase* RuntimeState::get_sink_local_state() {
     return _sink_local_state.get();
 }
 
@@ -490,6 +468,7 @@ RuntimeFilterMgr* RuntimeState::global_runtime_filter_mgr() {
 
 Status RuntimeState::register_producer_runtime_filter(
         const TRuntimeFilterDesc& desc, std::shared_ptr<RuntimeFilterProducer>* producer_filter) {
+    _registered_runtime_filter_ids.insert(desc.filter_id);
     // Producers are created by local runtime filter mgr and shared by global runtime filter manager.
     // When RF is published, consumers in both global and local RF mgr will be found.
     RETURN_IF_ERROR(local_runtime_filter_mgr()->register_producer_filter(_query_ctx, desc,
@@ -502,9 +481,10 @@ Status RuntimeState::register_producer_runtime_filter(
 Status RuntimeState::register_consumer_runtime_filter(
         const TRuntimeFilterDesc& desc, bool need_local_merge, int node_id,
         std::shared_ptr<RuntimeFilterConsumer>* consumer_filter) {
+    _registered_runtime_filter_ids.insert(desc.filter_id);
     bool need_merge = desc.has_remote_targets || need_local_merge;
     RuntimeFilterMgr* mgr = need_merge ? global_runtime_filter_mgr() : local_runtime_filter_mgr();
-    return mgr->register_consumer_filter(_query_ctx, desc, node_id, consumer_filter);
+    return mgr->register_consumer_filter(this, desc, node_id, consumer_filter);
 }
 
 bool RuntimeState::is_nereids() const {
@@ -516,19 +496,28 @@ std::vector<std::shared_ptr<RuntimeProfile>> RuntimeState::pipeline_id_to_profil
     return _pipeline_id_to_profile;
 }
 
+void RuntimeState::reset_to_rerun() {
+    if (local_runtime_filter_mgr()) {
+        local_runtime_filter_mgr()->remove_filters(_registered_runtime_filter_ids);
+        global_runtime_filter_mgr()->remove_filters(_registered_runtime_filter_ids);
+        _registered_runtime_filter_ids.clear();
+    }
+    std::unique_lock lc(_pipeline_profile_lock);
+    _pipeline_id_to_profile.clear();
+}
+
 std::vector<std::shared_ptr<RuntimeProfile>> RuntimeState::build_pipeline_profile(
         std::size_t pipeline_size) {
     std::unique_lock lc(_pipeline_profile_lock);
     if (!_pipeline_id_to_profile.empty()) {
-        throw Exception(ErrorCode::INTERNAL_ERROR,
-                        "build_pipeline_profile can only be called once.");
+        return _pipeline_id_to_profile;
     }
     _pipeline_id_to_profile.resize(pipeline_size);
     {
         size_t pip_idx = 0;
         for (auto& pipeline_profile : _pipeline_id_to_profile) {
             pipeline_profile =
-                    std::make_shared<RuntimeProfile>("Pipeline : " + std::to_string(pip_idx));
+                    std::make_shared<RuntimeProfile>(fmt::format("Pipeline(id={})", pip_idx));
             pip_idx++;
         }
     }
