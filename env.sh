@@ -20,12 +20,14 @@
 # check DORIS_HOME
 export LC_ALL=C
 
-# unset Homebrew compile env(include/lib path) to avoid conflict
-unset CPATH
-unset C_INCLUDE_PATH
-unset CPLUS_INCLUDE_PATH
-unset CPPFLAGS
-unset LDFLAGS
+# if [[ "$(uname -s)" == 'Darwin' ]]; then
+#     # unset Homebrew compile env(include/lib path) to avoid conflict
+#     unset CPATH
+#     unset C_INCLUDE_PATH
+#     unset CPLUS_INCLUDE_PATH
+#     unset CPPFLAGS
+#     unset LDFLAGS
+# fi
 
 if [[ -z "${DORIS_HOME}" ]]; then
     echo "Error: DORIS_HOME is not set"
@@ -57,7 +59,9 @@ HOMEBREW_REPO_PREFIX="$(brew --prefix)"
 CELLARS=(
     automake
     autoconf
+    flex
     libtool
+    libomp
     pkg-config
     texinfo
     coreutils
@@ -72,7 +76,7 @@ CELLARS=(
     wget
     pcre
     maven
-    llvm@20
+    llvm
     m4
 )
 for cellar in "\${CELLARS[@]}"; do
@@ -164,7 +168,14 @@ elif [[ "${DORIS_TOOLCHAIN}" == "clang" ]]; then
 
     export CC="${DORIS_CLANG_HOME}/bin/clang"
     export CXX="${DORIS_CLANG_HOME}/bin/clang++"
-    LIBOMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+    LIBOMP_PREFIX=''
+    if [[ "${TARGET_SYSTEM}" == 'Darwin' ]]; then
+        LIBOMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+        if [[ -z "${LIBOMP_PREFIX}" ]]; then
+            echo "Error: Homebrew libomp is missing. Please install it first because clang on macOS requires libomp to build Doris."
+            exit 1
+        fi
+    fi
     if [[ -n "${LIBOMP_PREFIX}" ]]; then
         export OpenMP_ROOT="${LIBOMP_PREFIX}"
         export CPPFLAGS="-I${LIBOMP_PREFIX}/include ${CPPFLAGS}"
