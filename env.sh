@@ -50,7 +50,9 @@ HOMEBREW_REPO_PREFIX="$(brew --prefix)"
 CELLARS=(
     automake
     autoconf
+    flex
     libtool
+    libomp
     pkg-config
     texinfo
     coreutils
@@ -65,7 +67,7 @@ CELLARS=(
     wget
     pcre
     maven
-    llvm@20
+    llvm
     m4
 )
 for cellar in "\${CELLARS[@]}"; do
@@ -146,7 +148,12 @@ if [[ "${DORIS_TOOLCHAIN}" == "gcc" ]]; then
 elif [[ "${DORIS_TOOLCHAIN}" == "clang" ]]; then
     # set CLANG HOME
     if [[ -z "${DORIS_CLANG_HOME}" ]]; then
-        DORIS_CLANG_HOME="$(dirname "$(command -v clang)")"/..
+        BREW_LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null || true)"
+        if [[ -n "${BREW_LLVM_PREFIX}" && -x "${BREW_LLVM_PREFIX}/bin/clang++" ]]; then
+            DORIS_CLANG_HOME="${BREW_LLVM_PREFIX}"
+        else
+            DORIS_CLANG_HOME="$(dirname "$(command -v clang)")"/..
+        fi
         export DORIS_CLANG_HOME
     fi
 
