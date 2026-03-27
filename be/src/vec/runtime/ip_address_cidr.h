@@ -119,14 +119,14 @@ inline bool match_ipv6_subnet(const uint8_t* addr, const uint8_t* cidr_addr, uin
     uint16_t mask = (uint16_t)_mm_movemask_epi8(
             _mm_cmpeq_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(addr)),
                            _mm_loadu_si128(reinterpret_cast<const __m128i*>(cidr_addr))));
-    mask = ~mask;
+    mask = static_cast<uint16_t>(~mask);
 
     if (mask) {
         const auto offset = std::countl_zero(mask);
         if (prefix / 8 != offset) {
             return prefix / 8 < offset;
         }
-        auto cmpmask = ~(0xff >> (prefix % 8));
+        auto cmpmask = static_cast<uint8_t>(~(0xff >> (prefix % 8)));
         return (addr[IPV6_BINARY_LENGTH - 1 - offset] & cmpmask) ==
                (cidr_addr[IPV6_BINARY_LENGTH - 1 - offset] & cmpmask);
     } else {
@@ -153,7 +153,7 @@ inline bool match_ipv6_subnet(const uint8_t* addr, const uint8_t* cidr_addr, uin
         return true;
     }
 
-    auto mask = ~(0xff >> prefix);
+    auto mask = static_cast<uint8_t>(~(0xff >> prefix));
     return (addr[i] & mask) == (cidr_addr[i] & mask);
 }
 #endif

@@ -91,6 +91,8 @@ fe/fe-core/src/main/antlr4/org/apache/doris/nereids/gen/
 fe/fe-common/src/main/java/org/apache/doris/thrift
 fe/fe-common/src/main/java/org/apache/parquet
 fe/fe-core/src/main/java/org/apache/parquet
+fe/conf
+fe/doris-meta
 
 # BE
 be/build*/

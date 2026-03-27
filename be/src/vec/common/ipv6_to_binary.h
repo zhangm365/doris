@@ -40,7 +40,7 @@ static constexpr RawMaskArrayT generate_bit_mask(size_t prefix) {
         arr[i] = 0xff;
     }
     if (prefix > 0) {
-        arr[i--] = ~(0xff >> prefix);
+        arr[i--] = static_cast<typename RawMaskArrayT::value_type>(~(0xff >> prefix) & 0xff);
     }
     while (i >= 0) {
         arr[i--] = 0x00;
