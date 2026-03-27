@@ -153,7 +153,7 @@ inline bool match_ipv6_subnet(const uint8_t* addr, const uint8_t* cidr_addr, uin
         return true;
     }
 
-    auto mask = ~(0xff >> prefix);
+    auto mask = static_cast<uint8_t>(~(0xff >> prefix));
     return (addr[i] & mask) == (cidr_addr[i] & mask);
 }
 #endif
