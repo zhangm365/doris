@@ -42,6 +42,8 @@ import org.apache.doris.nereids.trees.plans.commands.NeedAuditEncryption;
 import org.apache.doris.nereids.trees.plans.commands.insert.InsertIntoTableCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalOlapScan;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalOlapTableSink;
 import org.apache.doris.plugin.AuditEvent;
 import org.apache.doris.plugin.AuditEvent.AuditEventBuilder;
 import org.apache.doris.plugin.AuditEvent.EventType;
@@ -60,7 +62,10 @@ import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -305,6 +310,67 @@ public class AuditLogHelper {
                             .collect(Collectors.joining(","))
                             + "]";
                     auditEventBuilder.setChosenMViews(chosenMvsStr);
+
+                    // collect partition info for SELECT/INSERT/UPDATE/DELETE
+                    Map<String, List<String>> tableToPartitions = new LinkedHashMap<>();
+                    // scan-side partitions (read)
+                    List<PhysicalOlapScan> olapScans = nereidsPlanner.getPhysicalPlan()
+                            .collectToList(PhysicalOlapScan.class::isInstance);
+                    for (PhysicalOlapScan scan : olapScans) {
+                        String tableKey = scan.getTable().getNameWithFullQualifiers();
+                        List<String> partNames = new ArrayList<>();
+                        for (Long partId : scan.getSelectedPartitionIds()) {
+                            org.apache.doris.catalog.Partition partition =
+                                    scan.getTable().getPartition(partId);
+                            if (partition != null) {
+                                partNames.add(partition.getName());
+                            }
+                        }
+                        tableToPartitions.merge(tableKey, partNames, (a, b) -> {
+                            List<String> merged = new ArrayList<>(a);
+                            merged.addAll(b);
+                            return merged;
+                        });
+                    }
+                    // sink-side partitions (write) for INSERT/UPDATE/DELETE
+                    List<PhysicalOlapTableSink<?>> olapSinks = nereidsPlanner.getPhysicalPlan()
+                            .collectToList(PhysicalOlapTableSink.class::isInstance);
+                    for (PhysicalOlapTableSink<?> sink : olapSinks) {
+                        List<Long> sinkPartIds = sink.getPartitionIds();
+                        if (!sinkPartIds.isEmpty()) {
+                            String tableKey = "[write]" + sink.getTargetTable().getNameWithFullQualifiers();
+                            List<String> partNames = new ArrayList<>();
+                            for (Long partId : sinkPartIds) {
+                                org.apache.doris.catalog.Partition partition =
+                                        sink.getTargetTable().getPartition(partId);
+                                if (partition != null) {
+                                    partNames.add(partition.getName());
+                                }
+                            }
+                            tableToPartitions.merge(tableKey, partNames, (a, b) -> {
+                                List<String> merged = new ArrayList<>(a);
+                                merged.addAll(b);
+                                return merged;
+                            });
+                        }
+                    }
+                    if (!tableToPartitions.isEmpty()) {
+                        StringBuilder partSb = new StringBuilder("{");
+                        boolean first = true;
+                        for (Map.Entry<String, List<String>> entry : tableToPartitions.entrySet()) {
+                            if (!first) {
+                                partSb.append(",");
+                            }
+                            partSb.append("\"").append(entry.getKey()).append("\":[");
+                            partSb.append(entry.getValue().stream()
+                                    .map(p -> "\"" + p + "\"")
+                                    .collect(Collectors.joining(",")));
+                            partSb.append("]");
+                            first = false;
+                        }
+                        partSb.append("}");
+                        auditEventBuilder.setQueriedPartitions(partSb.toString());
+                    }
                 }
             }
         }
