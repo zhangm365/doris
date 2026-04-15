@@ -192,6 +192,8 @@ public class InternalSchema {
                 new TypeDef(new ArrayType(ScalarType.STRING)), ColumnNullableType.NULLABLE));
         AUDIT_SCHEMA.add(new ColumnDef("chosen_m_views",
                 new TypeDef(new ArrayType(ScalarType.STRING)), ColumnNullableType.NULLABLE));
+        AUDIT_SCHEMA.add(new ColumnDef("queried_partitions",
+                TypeDef.create(PrimitiveType.STRING), ColumnNullableType.NULLABLE));
         // variable and configs
         AUDIT_SCHEMA.add(new ColumnDef("changed_variables",
                 new TypeDef(new MapType(ScalarType.STRING, ScalarType.STRING)), ColumnNullableType.NULLABLE));

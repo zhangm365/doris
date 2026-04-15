@@ -191,6 +191,7 @@ public class AuditLoader extends Plugin implements AuditPlugin {
         // queried tables, views and m-views
         logBuffer.append(event.queriedTablesAndViews).append(AUDIT_TABLE_COL_SEPARATOR);
         logBuffer.append(event.chosenMViews).append(AUDIT_TABLE_COL_SEPARATOR);
+        logBuffer.append(event.queriedPartitions).append(AUDIT_TABLE_COL_SEPARATOR);
 
         // variable and configs
         logBuffer.append(event.changedVariables).append(AUDIT_TABLE_COL_SEPARATOR);

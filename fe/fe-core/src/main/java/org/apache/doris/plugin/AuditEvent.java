@@ -126,6 +126,8 @@ public class AuditEvent {
     public String queriedTablesAndViews = "";
     @AuditField(value = "chosenMViews", colName = "chosen_m_views")
     public String chosenMViews = "";
+    @AuditField(value = "queriedPartitions", colName = "queried_partitions")
+    public String queriedPartitions = "";
 
     // variable and configs
     @AuditField(value = "ChangedVariables", colName = "changed_variables")
@@ -388,6 +390,11 @@ public class AuditEvent {
 
         public AuditEventBuilder setChosenMViews(String chosenMViews) {
             auditEvent.chosenMViews = chosenMViews;
+            return this;
+        }
+
+        public AuditEventBuilder setQueriedPartitions(String queriedPartitions) {
+            auditEvent.queriedPartitions = queriedPartitions;
             return this;
         }
 
