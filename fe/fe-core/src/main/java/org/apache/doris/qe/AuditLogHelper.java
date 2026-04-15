@@ -310,8 +310,10 @@ public class AuditLogHelper {
                             .collect(Collectors.joining(","))
                             + "]";
                     auditEventBuilder.setChosenMViews(chosenMvsStr);
+                }
 
-                    // collect partition info for SELECT/INSERT/UPDATE/DELETE
+                // collect partition info for SELECT/INSERT/UPDATE/DELETE
+                if (nereidsPlanner.getPhysicalPlan() != null) {
                     Map<String, List<String>> tableToPartitions = new LinkedHashMap<>();
                     // scan-side partitions (read)
                     List<PhysicalOlapScan> olapScans = nereidsPlanner.getPhysicalPlan()
@@ -332,7 +334,7 @@ public class AuditLogHelper {
                             return merged;
                         });
                     }
-                    // sink-side partitions (write) for INSERT/UPDATE/DELETE
+                    // sink-side partitions (write) for INSERT/UPDATE/DELETE with explicit PARTITION clause
                     List<PhysicalOlapTableSink<?>> olapSinks = nereidsPlanner.getPhysicalPlan()
                             .collectToList(PhysicalOlapTableSink.class::isInstance);
                     for (PhysicalOlapTableSink<?> sink : olapSinks) {
