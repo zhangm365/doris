@@ -62,8 +62,8 @@ import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -74,6 +74,8 @@ public class AuditLogHelper {
 
     private static final Logger LOG = LogManager.getLogger(AuditLogHelper.class);
     private static final Set<String> LOG_PLAN_INFO_TYPES = Sets.newTreeSet(String.CASE_INSENSITIVE_ORDER);
+    // max length for queriedPartitions field to avoid oversized audit log entries
+    static final int MAX_QUERIED_PARTITIONS_LENGTH = 4096;
 
     static {
         LOG_PLAN_INFO_TYPES.add("SELECT");
@@ -183,6 +185,42 @@ public class AuditLogHelper {
             }
         }
         return cnt;
+    }
+
+    // Escapes " and \ in a JSON string value to produce valid JSON output.
+    private static String escapeJsonValue(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * Serializes the tableToPartitions map to a compact JSON string.
+     * Returns null if the map is empty.
+     * Output is truncated to MAX_QUERIED_PARTITIONS_LENGTH to bound log entry size.
+     * Package-visible for unit testing.
+     */
+    static String buildPartitionJson(Map<String, Set<String>> tableToPartitions) {
+        if (tableToPartitions.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, Set<String>> entry : tableToPartitions.entrySet()) {
+            if (!first) {
+                sb.append(",");
+            }
+            sb.append("\"").append(escapeJsonValue(entry.getKey())).append("\":[");
+            sb.append(entry.getValue().stream()
+                    .map(p -> "\"" + escapeJsonValue(p) + "\"")
+                    .collect(Collectors.joining(",")));
+            sb.append("]");
+            first = false;
+        }
+        sb.append("}");
+        String result = sb.toString();
+        if (result.length() > MAX_QUERIED_PARTITIONS_LENGTH) {
+            return result.substring(0, MAX_QUERIED_PARTITIONS_LENGTH) + "...}";
+        }
+        return result;
     }
 
     private static void logAuditLogImpl(ConnectContext ctx, String origStmt, StatementBase parsedStmt,
@@ -314,13 +352,13 @@ public class AuditLogHelper {
 
                 // collect partition info for SELECT/INSERT/UPDATE/DELETE
                 if (nereidsPlanner.getPhysicalPlan() != null) {
-                    Map<String, List<String>> tableToPartitions = new LinkedHashMap<>();
+                    Map<String, Set<String>> tableToPartitions = new LinkedHashMap<>();
                     // scan-side partitions (read)
                     List<PhysicalOlapScan> olapScans = nereidsPlanner.getPhysicalPlan()
                             .collectToList(PhysicalOlapScan.class::isInstance);
                     for (PhysicalOlapScan scan : olapScans) {
                         String tableKey = scan.getTable().getNameWithFullQualifiers();
-                        List<String> partNames = new ArrayList<>();
+                        Set<String> partNames = new LinkedHashSet<>();
                         for (Long partId : scan.getSelectedPartitionIds()) {
                             org.apache.doris.catalog.Partition partition =
                                     scan.getTable().getPartition(partId);
@@ -328,11 +366,13 @@ public class AuditLogHelper {
                                 partNames.add(partition.getName());
                             }
                         }
-                        tableToPartitions.merge(tableKey, partNames, (a, b) -> {
-                            List<String> merged = new ArrayList<>(a);
-                            merged.addAll(b);
-                            return merged;
-                        });
+                        if (!partNames.isEmpty()) {
+                            tableToPartitions.merge(tableKey, partNames, (a, b) -> {
+                                Set<String> merged = new LinkedHashSet<>(a);
+                                merged.addAll(b);
+                                return merged;
+                            });
+                        }
                     }
                     // sink-side partitions (write) for INSERT/UPDATE/DELETE with explicit PARTITION clause
                     List<PhysicalOlapTableSink<?>> olapSinks = nereidsPlanner.getPhysicalPlan()
@@ -341,7 +381,7 @@ public class AuditLogHelper {
                         List<Long> sinkPartIds = sink.getPartitionIds();
                         if (!sinkPartIds.isEmpty()) {
                             String tableKey = "[write]" + sink.getTargetTable().getNameWithFullQualifiers();
-                            List<String> partNames = new ArrayList<>();
+                            Set<String> partNames = new LinkedHashSet<>();
                             for (Long partId : sinkPartIds) {
                                 org.apache.doris.catalog.Partition partition =
                                         sink.getTargetTable().getPartition(partId);
@@ -349,29 +389,18 @@ public class AuditLogHelper {
                                     partNames.add(partition.getName());
                                 }
                             }
-                            tableToPartitions.merge(tableKey, partNames, (a, b) -> {
-                                List<String> merged = new ArrayList<>(a);
-                                merged.addAll(b);
-                                return merged;
-                            });
+                            if (!partNames.isEmpty()) {
+                                tableToPartitions.merge(tableKey, partNames, (a, b) -> {
+                                    Set<String> merged = new LinkedHashSet<>(a);
+                                    merged.addAll(b);
+                                    return merged;
+                                });
+                            }
                         }
                     }
-                    if (!tableToPartitions.isEmpty()) {
-                        StringBuilder partSb = new StringBuilder("{");
-                        boolean first = true;
-                        for (Map.Entry<String, List<String>> entry : tableToPartitions.entrySet()) {
-                            if (!first) {
-                                partSb.append(",");
-                            }
-                            partSb.append("\"").append(entry.getKey()).append("\":[");
-                            partSb.append(entry.getValue().stream()
-                                    .map(p -> "\"" + p + "\"")
-                                    .collect(Collectors.joining(",")));
-                            partSb.append("]");
-                            first = false;
-                        }
-                        partSb.append("}");
-                        auditEventBuilder.setQueriedPartitions(partSb.toString());
+                    String partJson = buildPartitionJson(tableToPartitions);
+                    if (partJson != null) {
+                        auditEventBuilder.setQueriedPartitions(partJson);
                     }
                 }
             }
