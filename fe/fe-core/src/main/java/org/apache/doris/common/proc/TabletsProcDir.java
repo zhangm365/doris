@@ -17,12 +17,14 @@
 
 package org.apache.doris.common.proc;
 
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.DiskInfo;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MaterializedIndex;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
+import org.apache.doris.catalog.TabletSlidingWindowAccessStats;
 import org.apache.doris.cloud.catalog.CloudReplica;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
@@ -30,12 +32,15 @@ import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.util.ListComparator;
 import org.apache.doris.common.util.NetUtils;
 import org.apache.doris.common.util.TimeUtils;
+import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.statistics.query.QueryStatsUtil;
 import org.apache.doris.system.Backend;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,6 +53,7 @@ import java.util.Map;
  * show tablets' detail info within an index
  */
 public class TabletsProcDir implements ProcDirInterface {
+    private static final Logger LOG = LogManager.getLogger(TabletsProcDir.class);
     public static final ImmutableList<String> TITLE_NAMES;
 
     static {
@@ -56,7 +62,8 @@ public class TabletsProcDir implements ProcDirInterface {
                 .add("LstSuccessVersion").add("LstFailedVersion").add("LstFailedTime")
                 .add("LocalDataSize").add("RemoteDataSize").add("RowCount").add("State")
                 .add("LstConsistencyCheckTime").add("CheckVersion")
-                .add("VisibleVersionCount").add("VersionCount").add("QueryHits").add("PathHash").add("Path")
+                .add("VisibleVersionCount").add("VersionCount").add("QueryHits").add("WindowAccessCount")
+                .add("LastAccessTime").add("PathHash").add("Path")
                 .add("MetaUrl").add("CompactionStatus")
                 .add("CooldownReplicaId").add("CooldownMetaId");
 
@@ -69,10 +76,16 @@ public class TabletsProcDir implements ProcDirInterface {
 
     private Table table;
     private MaterializedIndex index;
+    private final long partitionVisibleVersion;
 
     public TabletsProcDir(Table table, MaterializedIndex index) {
+        this(table, index, -1L);
+    }
+
+    public TabletsProcDir(Table table, MaterializedIndex index, long partitionVisibleVersion) {
         this.table = table;
         this.index = index;
+        this.partitionVisibleVersion = partitionVisibleVersion;
     }
 
     public List<List<Comparable>> fetchComparableResult(long version, long backendId, Replica.ReplicaState state)
@@ -87,6 +100,11 @@ public class TabletsProcDir implements ProcDirInterface {
             for (DiskInfo diskInfo : be.getDisks().values()) {
                 pathHashToRoot.put(diskInfo.getPathHash(), diskInfo.getRootPath());
             }
+        }
+        List<Long> tabletIds = null;
+        if (Config.isCloudMode() && ConnectContext.get() != null && ConnectContext.get()
+                .getSessionVariable().cloudForceSyncTabletStats) {
+            tabletIds = new ArrayList<>();
         }
         table.readLock();
         try {
@@ -103,6 +121,9 @@ public class TabletsProcDir implements ProcDirInterface {
 
             // get infos
             for (Tablet tablet : index.getTablets()) {
+                if (tabletIds != null) {
+                    tabletIds.add(tablet.getId());
+                }
                 long tabletId = tablet.getId();
                 if (tablet.getReplicas().size() == 0) {
                     List<Comparable> tabletInfo = new ArrayList<Comparable>();
@@ -128,6 +149,8 @@ public class TabletsProcDir implements ProcDirInterface {
                     tabletInfo.add(-1); // visible version count
                     tabletInfo.add(-1); // total version count
                     tabletInfo.add(0L); // query hits
+                    tabletInfo.add(0L); // query WindowAccessCount
+                    tabletInfo.add(0L); // query LastAccessTime
                     tabletInfo.add(-1); // path hash
                     tabletInfo.add(FeConstants.null_string); // path
                     tabletInfo.add(FeConstants.null_string); // meta url
@@ -140,6 +163,14 @@ public class TabletsProcDir implements ProcDirInterface {
 
                     tabletInfos.add(tabletInfo);
                 } else {
+                    TabletSlidingWindowAccessStats.AccessStatsResult asr = TabletSlidingWindowAccessStats.getInstance()
+                            .getAccessInfo(tabletId);
+                    long accessCount = 0;
+                    long lastAccessTime = 0;
+                    if (asr != null) {
+                        accessCount = asr.accessCount;
+                        lastAccessTime = asr.lastAccessTime;
+                    }
                     for (Replica replica : tablet.getReplicas()) {
                         long beId = replica.getBackendIdWithoutException();
                         if ((version > -1 && replica.getVersion() != version)
@@ -147,14 +178,18 @@ public class TabletsProcDir implements ProcDirInterface {
                                 || (state != null && replica.getState() != state)) {
                             continue;
                         }
+                        long displayVersion = ProcReplicaVersionDisplay.getDisplayReplicaVersion(
+                                replica, partitionVisibleVersion);
+                        long displayLastSuccessVersion = ProcReplicaVersionDisplay.getDisplayReplicaLastSuccessVersion(
+                                replica, partitionVisibleVersion);
                         List<Comparable> tabletInfo = new ArrayList<Comparable>();
                         // tabletId -- replicaId -- backendId -- version -- dataSize -- rowCount -- state
                         tabletInfo.add(tabletId);
                         tabletInfo.add(replica.getId());
                         tabletInfo.add(beId);
                         tabletInfo.add(replica.getSchemaHash());
-                        tabletInfo.add(replica.getVersion());
-                        tabletInfo.add(replica.getLastSuccessVersion());
+                        tabletInfo.add(displayVersion);
+                        tabletInfo.add(displayLastSuccessVersion);
                         tabletInfo.add(replica.getLastFailedVersion());
                         tabletInfo.add(TimeUtils.longToTimeString(replica.getLastFailedTimestamp()));
                         tabletInfo.add(replica.getDataSize());
@@ -167,6 +202,8 @@ public class TabletsProcDir implements ProcDirInterface {
                         tabletInfo.add(replica.getVisibleVersionCount());
                         tabletInfo.add(replica.getTotalVersionCount());
                         tabletInfo.add(replicaIdToQueryHits.getOrDefault(replica.getId(), 0L));
+                        tabletInfo.add(String.valueOf(accessCount));
+                        tabletInfo.add(String.valueOf(lastAccessTime));
                         tabletInfo.add(replica.getPathHash());
                         tabletInfo.add(pathHashToRoot.getOrDefault(replica.getPathHash(), ""));
                         Backend be = backendMap.get(beId);
@@ -193,6 +230,10 @@ public class TabletsProcDir implements ProcDirInterface {
             }
         } finally {
             table.readUnlock();
+        }
+        if (tabletIds != null && !tabletIds.isEmpty()) {
+            LOG.info("force sync tablet stats for table: {}, tabletNum: {}", table, tabletIds.size());
+            CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
         }
         return tabletInfos;
     }

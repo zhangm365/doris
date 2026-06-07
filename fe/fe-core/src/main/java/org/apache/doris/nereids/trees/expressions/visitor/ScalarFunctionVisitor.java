@@ -305,6 +305,7 @@ import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonInsert;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonKeys;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonLength;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonObject;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonObjectFlatten;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonQuote;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonRemove;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.JsonReplace;
@@ -394,6 +395,7 @@ import org.apache.doris.nereids.trees.expressions.functions.scalar.MultiSearchAl
 import org.apache.doris.nereids.trees.expressions.functions.scalar.MurmurHash332;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.MurmurHash364;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.MurmurHash364V2;
+import org.apache.doris.nereids.trees.expressions.functions.scalar.MurmurHash3U64V2;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.Negative;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.NextDay;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.NgramSearch;
@@ -1709,6 +1711,10 @@ public interface ScalarFunctionVisitor<R, C> {
         return visitScalarFunction(jsonObject, context);
     }
 
+    default R visitJsonObjectFlatten(JsonObjectFlatten jsonObjectFlatten, C context) {
+        return visitScalarFunction(jsonObjectFlatten, context);
+    }
+
     default R visitJsonExtractNoQuotes(JsonExtractNoQuotes jsonExtract, C context) {
         return visitScalarFunction(jsonExtract, context);
     }
@@ -1987,6 +1993,10 @@ public interface ScalarFunctionVisitor<R, C> {
 
     default R visitMurmurHash364V2(MurmurHash364V2 murmurHash364V2, C context) {
         return visitScalarFunction(murmurHash364V2, context);
+    }
+
+    default R visitMurmurHash3U64V2(MurmurHash3U64V2 murmurHash3U64V2, C context) {
+        return visitScalarFunction(murmurHash3U64V2, context);
     }
 
     default R visitXxHash32(XxHash32 xxHash32, C context) {

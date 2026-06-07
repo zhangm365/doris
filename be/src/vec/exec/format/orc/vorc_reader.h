@@ -150,9 +150,18 @@ public:
               io::IOContext* io_ctx, FileMetaCache* meta_cache = nullptr,
               bool enable_lazy_mat = true);
 
+    OrcReader(RuntimeProfile* profile, RuntimeState* state, const TFileScanRangeParams& params,
+              const TFileRangeDesc& range, size_t batch_size, const std::string& ctz,
+              std::shared_ptr<io::IOContext> io_ctx_holder, FileMetaCache* meta_cache = nullptr,
+              bool enable_lazy_mat = true);
+
     OrcReader(const TFileScanRangeParams& params, const TFileRangeDesc& range,
               const std::string& ctz, io::IOContext* io_ctx, FileMetaCache* meta_cache = nullptr,
               bool enable_lazy_mat = true);
+
+    OrcReader(const TFileScanRangeParams& params, const TFileRangeDesc& range,
+              const std::string& ctz, std::shared_ptr<io::IOContext> io_ctx_holder,
+              FileMetaCache* meta_cache = nullptr, bool enable_lazy_mat = true);
 
     ~OrcReader() override;
     //If you want to read the file by index instead of column name, set hive_use_column_names to false.
@@ -515,8 +524,8 @@ private:
                     }
                 }
 
-                // because the date api argument is int32_t, we should cast to int32_t.
-                int32_t date_value = cast_set<int32_t>(data->data[i]) + _offset_days;
+                // ORC DATE stores a logical day count without time zone semantics.
+                int32_t date_value = cast_set<int32_t>(data->data[i]);
                 if constexpr (std::is_same_v<CppType, VecDateTimeValue>) {
                     v.create_from_date_v2(date_dict[date_value], TIME_DATE);
                     // we should cast to date if using date v1.
@@ -659,7 +668,6 @@ private:
     int64_t _range_size;
     std::string _ctz;
 
-    int32_t _offset_days = 0;
     cctz::time_zone _time_zone;
 
     // The columns of the table to be read (contain columns that do not exist)
@@ -697,6 +705,7 @@ private:
     std::shared_ptr<io::FileSystem> _file_system;
 
     io::IOContext* _io_ctx = nullptr;
+    std::shared_ptr<io::IOContext> _io_ctx_holder;
     bool _enable_lazy_mat = true;
     bool _enable_filter_by_min_max = true;
 

@@ -423,8 +423,15 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
             if (runningStreamTask == null) {
                 return;
             }
+            // Check status before cancel: if the task was still active (RUNNING or PENDING),
+            // count it as canceled. If already in a terminal state (e.g. FAILED), it was
+            // already counted by onStreamTaskFail(), so skip to avoid double-counting.
+            boolean wasActive = TaskStatus.RUNNING.equals(runningStreamTask.getStatus())
+                    || TaskStatus.PENDING.equals(runningStreamTask.getStatus());
             runningStreamTask.cancel(needWaitCancelComplete);
-            canceledTaskCount.incrementAndGet();
+            if (wasActive) {
+                canceledTaskCount.incrementAndGet();
+            }
         } finally {
             lock.writeLock().unlock();
         }
@@ -638,6 +645,9 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
         this.jobStatistic.setFileNumber(this.jobStatistic.getFileNumber() + attachment.getNumFiles());
         this.jobStatistic.setFileSize(this.jobStatistic.getFileSize() + attachment.getFileBytes());
         offsetProvider.updateOffset(offsetProvider.deserializeOffset(attachment.getOffset()));
+        // Sync offsetProviderPersist after each offset update so the checkpoint thread
+        // (which replays journals on its own Env) writes the latest offset into the image.
+        this.offsetProviderPersist = offsetProvider.getPersistInfo();
 
         //update metric
         if (MetricRepo.isInit && !isReplay) {
@@ -744,6 +754,7 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
         if (StringUtils.isNotEmpty(inputStreamProps.getOffsetProperty()) && this.tvfType != null) {
             Offset offset = validateOffset(inputStreamProps.getOffsetProperty());
             this.offsetProvider.updateOffset(offset);
+            this.offsetProviderPersist = offsetProvider.getPersistInfo();
             if (Config.isCloudMode()) {
                 resetCloudProgress(offset);
             }
@@ -981,13 +992,13 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
 
     @Override
     public void beforeCommitted(TransactionState txnState) throws TransactionException {
-        boolean shouldReleaseLock = false;
         writeLock();
+        boolean passCheck = false;
         try {
             if (runningStreamTask.getIsCanceled().get()) {
-                log.info("streaming insert job {} task {} is canceled, skip beforeCommitted",
-                        getJobId(), runningStreamTask.getTaskId());
-                return;
+                throw new TransactionException("streaming insert job " + getJobId()
+                        + " task " + runningStreamTask.getTaskId()
+                        + " is canceled, txn " + txnState.getTransactionId() + " could not be committed");
             }
 
             ArrayList<Long> taskIds = new ArrayList<>();
@@ -1008,8 +1019,9 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
                         loadStatistic.getFileNumber(),
                         loadStatistic.getTotalFileSizeB(),
                         runningStreamTask.getRunningOffset().toSerializedJson()));
+            passCheck = true;
         } finally {
-            if (shouldReleaseLock) {
+            if (!passCheck) {
                 writeUnlock();
             }
         }
@@ -1101,6 +1113,7 @@ public class StreamingInsertJob extends AbstractJob<StreamingJobSchedulerTask, M
         if (offsetProvider == null) {
             if (tvfType != null) {
                 offsetProvider = SourceOffsetProviderFactory.createSourceOffsetProvider(tvfType);
+                offsetProvider.restoreFromPersistInfo(offsetProviderPersist);
             } else {
                 offsetProvider = new JdbcSourceOffsetProvider(getJobId(), dataSourceType, sourceProperties);
             }

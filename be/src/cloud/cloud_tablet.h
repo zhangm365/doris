@@ -159,6 +159,25 @@ public:
     void delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
                         std::unique_lock<std::shared_mutex>& meta_lock);
 
+    // Like delete_rowsets, but also removes edges from the version graph.
+    // Used by schema change to prevent the greedy capture algorithm from
+    // preferring stale compaction rowsets over individual SC output rowsets.
+    // MUST hold EXCLUSIVE `_meta_lock`.
+    void delete_rowsets_for_schema_change(const std::vector<RowsetSharedPtr>& to_delete,
+                                          std::unique_lock<std::shared_mutex>& meta_lock,
+                                          bool recycle_deleted_rowsets = true);
+
+    // Replace local rowsets in [2, alter_version] with schema change output rowsets.
+    // Existing SC output rowsets are kept; other local/double-write/compaction rowsets
+    // in this version range are removed from both _rs_version_map and version graph.
+    // recycle_deleted_rowsets should only be true for the real tablet; temporary
+    // schema-change delete-bitmap tablets only need to normalize their local graph.
+    // MUST hold EXCLUSIVE `_meta_lock`.
+    void replace_rowsets_with_schema_change_output(
+            const std::vector<RowsetSharedPtr>& output_rowsets, int64_t alter_version,
+            std::unique_lock<std::shared_mutex>& meta_lock, const char* stage,
+            bool recycle_deleted_rowsets);
+
     // When the tablet is dropped, we need to recycle cached data:
     // 1. The data in file cache
     // 2. The memory in tablet cache
@@ -250,6 +269,21 @@ public:
 
     int64_t alter_version() const { return _alter_version; }
     void set_alter_version(int64_t alter_version) { _alter_version = alter_version; }
+
+    // Last active cluster info for compaction read-write separation
+    std::string last_active_cluster_id() const {
+        std::shared_lock lock(_cluster_info_mutex);
+        return _last_active_cluster_id;
+    }
+    int64_t last_active_time_ms() const {
+        std::shared_lock lock(_cluster_info_mutex);
+        return _last_active_time_ms;
+    }
+    void set_last_active_cluster_info(const std::string& cluster_id, int64_t time_ms) {
+        std::unique_lock lock(_cluster_info_mutex);
+        _last_active_cluster_id = cluster_id;
+        _last_active_time_ms = time_ms;
+    }
 
     std::vector<RowsetSharedPtr> pick_candidate_rowsets_to_base_compaction();
 
@@ -352,6 +386,9 @@ public:
     bool is_rowset_warmed_up(const RowsetId& rowset_id) const;
 
     void add_warmed_up_rowset(const RowsetId& rowset_id);
+    // Test helper: add a rowset to the warmup state map with DOING progress,
+    // so that is_rowset_warmed_up() returns false for it.
+    void add_not_warmed_up_rowset(const RowsetId& rowset_id);
 
     std::string rowset_warmup_digest() const {
         std::string res;
@@ -468,6 +505,11 @@ private:
 
     mutable std::shared_mutex _warmed_up_rowsets_mutex;
     std::unordered_set<RowsetId> _warmed_up_rowsets;
+
+    // Cluster info for compaction read-write separation
+    mutable std::shared_mutex _cluster_info_mutex;
+    std::string _last_active_cluster_id;
+    int64_t _last_active_time_ms {0};
 };
 
 using CloudTabletSPtr = std::shared_ptr<CloudTablet>;

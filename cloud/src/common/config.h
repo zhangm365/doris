@@ -101,6 +101,9 @@ CONF_Strings(recycle_whitelist, ""); // Comma seprated list
 CONF_Strings(recycle_blacklist, ""); // Comma seprated list
 // IO worker thread pool concurrency: object list, delete
 CONF_mInt32(instance_recycler_worker_pool_size, "32");
+// Max number of delete tasks per batch when recycling objects.
+// Each task deletes up to 1000 files. Controls memory usage during large-scale deletion.
+CONF_Int32(recycler_max_tasks_per_batch, "1000");
 // The worker pool size for http api `statistics_recycle` worker pool
 CONF_mInt32(instance_recycler_statistics_recycle_worker_pool_size, "5");
 CONF_Bool(enable_checker, "false");
@@ -387,7 +390,7 @@ CONF_Bool(enable_split_rowset_meta_pb, "true");
 CONF_Int32(split_rowset_meta_pb_size, "10000"); // split rowset meta pb size, default is 10K
 CONF_Bool(enable_split_tablet_schema_pb, "false");
 CONF_Int32(split_tablet_schema_pb_size, "10000"); // split tablet schema pb size, default is 10K
-CONF_Bool(enable_check_fe_drop_in_safe_time, "true");
+CONF_mBool(enable_check_fe_drop_in_safe_time, "true");
 
 CONF_Bool(enable_logging_for_single_version_reading, "false");
 CONF_mBool(enable_logging_conflict_keys, "false");
@@ -432,4 +435,6 @@ CONF_Bool(enable_instance_update_watcher, "true");
 CONF_mBool(advance_txn_lazy_commit_during_reads, "true");
 CONF_mBool(wait_txn_lazy_commit_during_reads, "true");
 
+// Whether to enable recycler. If false, the recycler will skip scanning instances to pending queue.
+CONF_mBool(enable_recycler, "true");
 } // namespace doris::cloud::config

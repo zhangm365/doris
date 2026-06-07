@@ -103,6 +103,27 @@ md5sum_func() {
     return 0
 }
 
+juicefs_default_repository_url() {
+    if [[ -n "${s3BucketName:-}" && -n "${s3Endpoint:-}" ]]; then
+        echo "https://${s3BucketName}.${s3Endpoint}/regression/datalake/thirdparty/juicefs"
+        return 0
+    fi
+    echo "https://doris-thirdparty-repo.bj.bcebos.com/thirdparty"
+}
+
+juicefs_repository_url() {
+    local repository_url="${JUICEFS_THIRDPARTY_REPOSITORY_URL:-${REPOSITORY_URL:-}}"
+    if [[ -z "${repository_url}" ]]; then
+        repository_url="$(juicefs_default_repository_url)"
+    fi
+    echo "${repository_url%/}"
+}
+
+juicefs_repository_file_url() {
+    local filename="$1"
+    echo "$(juicefs_repository_url)/${filename}"
+}
+
 # return 0 if download succeed.
 # return 1 if not.
 download_func() {
@@ -161,6 +182,15 @@ echo "===== Downloading thirdparty archives..."
 for TP_ARCH in "${TP_ARCHIVES[@]}"; do
     NAME="${TP_ARCH}_NAME"
     MD5SUM="${TP_ARCH}_MD5SUM"
+    if [[ "${TP_ARCH}" == "JUICEFS" ]]; then
+        MIRROR_URL="$(juicefs_repository_file_url "${!NAME}")"
+        if ! download_func "${!NAME}" "${MIRROR_URL}" "${TP_SOURCE_DIR}" "${!MD5SUM}" \
+                && ! download_func "${!NAME}" "${JUICEFS_DOWNLOAD}" "${TP_SOURCE_DIR}" "${!MD5SUM}"; then
+            echo "Failed to download ${!NAME}"
+            exit 1
+        fi
+        continue
+    fi
     if [[ -z "${REPOSITORY_URL}" ]]; then
         URL="${TP_ARCH}_DOWNLOAD"
         if ! download_func "${!NAME}" "${!URL}" "${TP_SOURCE_DIR}" "${!MD5SUM}"; then
@@ -337,6 +367,22 @@ if [[ " ${TP_ARCHIVES[*]} " =~ " ARROW " ]]; then
         cd "${TP_SOURCE_DIR}/${ARROW_SOURCE}"
         if [[ ! -f "${PATCHED_MARK}" ]]; then
             patch -p1 <"${TP_PATCH_DIR}/apache-arrow-13.0.0.patch"
+            touch "${PATCHED_MARK}"
+        fi
+        cd -
+    fi
+    if [[ "${ARROW_SOURCE}" == "arrow-apache-arrow-17.0.0" ]]; then
+        cd "${TP_SOURCE_DIR}/${ARROW_SOURCE}"
+        if [[ ! -f "${PATCHED_MARK}" ]]; then
+            # apache-arrow-17.0.0-status-inline-static-fix.patch :
+            # Move Status::message()/detail() empty sentinels out of header
+            # inline function-local statics. Clang can place those weak inline
+            # std::string objects in RELRO, then crash while initializing them.
+            patch -p1 <"${TP_PATCH_DIR}/apache-arrow-17.0.0-status-inline-static-fix.patch"
+
+            # apache-arrow-17.0.0-force-write-int96-timestamps.patch : 
+            # Introducing the parameter that forces writing int96 timestampes for compatibility build branch-4.0. 
+            patch -p1 <"${TP_PATCH_DIR}/apache-arrow-17.0.0-force-write-int96-timestamps.patch"
             touch "${PATCHED_MARK}"
         fi
         cd -

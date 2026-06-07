@@ -29,6 +29,7 @@
 #include "common/status.h"
 #include "olap/lru_cache.h"
 #include "runtime/memory/cache_policy.h"
+#include "util/stack_util.h"
 
 namespace doris {
 uint64_t g_tablet_report_inactive_duration_ms = 0;
@@ -175,6 +176,8 @@ Result<std::shared_ptr<CloudTablet>> CloudTabletMgr::get_tablet(int64_t tablet_i
         std::shared_ptr<CloudTablet> tablet;
         TabletMap& tablet_map;
     };
+
+    VLOG_DEBUG << "get_tablet tablet_id=" << tablet_id << " stack: " << get_stack_trace();
 
     auto tablet_id_str = std::to_string(tablet_id);
     CacheKey key(tablet_id_str);
@@ -404,10 +407,17 @@ Status CloudTabletMgr::get_topn_tablets_to_compact(
     auto now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
     auto skip = [now, compaction_type](CloudTablet* t) {
         auto* cloud_cluster_info = static_cast<CloudClusterInfo*>(ExecEnv::GetInstance()->cluster_info());
+
         if (config::enable_standby_passive_compaction && cloud_cluster_info->is_in_standby()) {
             if (t->fetch_add_approximate_num_rowsets(0) < config::max_tablet_version_num * config::standby_compaction_version_ratio) {
                 return true;
             }
+        }
+
+        // Compaction read-write separation: skip tablets that should be compacted by other clusters.
+        // Placed after standby check so standby invariants (version count threshold) are preserved.
+        if (cloud_cluster_info->should_skip_compaction(t)) {
+            return true;
         }
 
         int32_t max_version_config = t->max_version_config();
@@ -419,7 +429,7 @@ Status CloudTabletMgr::get_topn_tablets_to_compact(
             g_base_compaction_not_frozen_tablet_num << !is_frozen;
             return is_recent_failure || is_frozen;
         }
-        
+
         // If tablet has too many rowsets but not be compacted for a long time, compaction should be performed
         // regardless of whether there is a load job recently.
         bool is_recent_failure = now - t->last_cumu_compaction_failure_time() < config::min_compaction_failure_interval_ms;

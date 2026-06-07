@@ -47,10 +47,13 @@ import org.apache.flink.cdc.connectors.postgres.source.fetch.PostgresStreamFetch
 import org.apache.flink.cdc.connectors.postgres.source.offset.PostgresOffset;
 import org.apache.flink.cdc.connectors.postgres.source.offset.PostgresOffsetFactory;
 import org.apache.flink.cdc.connectors.postgres.source.utils.CustomPostgresSchema;
+import org.apache.flink.cdc.connectors.postgres.source.utils.PostgresQueryUtils;
 import org.apache.flink.cdc.connectors.postgres.source.utils.PostgresTypeUtils;
 import org.apache.flink.cdc.connectors.postgres.source.utils.TableDiscoveryUtils;
 import org.apache.flink.table.types.DataType;
 
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -61,6 +64,7 @@ import java.util.Properties;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Preconditions;
+import io.debezium.connector.postgresql.PostgresOffsetContext;
 import io.debezium.connector.postgresql.SourceInfo;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
 import io.debezium.connector.postgresql.connection.PostgresReplicationConnection;
@@ -287,6 +291,26 @@ public class PostgresSourceReader extends JdbcIncrementalSourceReader {
         return PostgresTypeUtils.fromDbzColumn(splitColumn);
     }
 
+    @Override
+    protected Class<?> probeSplitKeyClass(
+            TableId tableId, Column splitColumn, JobBaseConfig jobConfig) {
+        PostgresSourceConfig sourceConfig = getSourceConfig(jobConfig);
+        String sql =
+                String.format(
+                        "SELECT %s FROM %s WHERE 1=0",
+                        PostgresQueryUtils.quote(splitColumn.name()),
+                        PostgresQueryUtils.quote(tableId));
+        try (JdbcConnection jdbc =
+                        new PostgresDialect(sourceConfig).openJdbcConnection(sourceConfig);
+                Statement st = jdbc.connection().createStatement();
+                ResultSet rs = st.executeQuery(sql)) {
+            return Class.forName(rs.getMetaData().getColumnClassName(1));
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Probe split key class failed for " + tableId + "." + splitColumn.name(), e);
+        }
+    }
+
     /**
      * Why not call dialect.displayCurrentOffset(sourceConfig) ? The underlying system calls
      * `txid_current()` to advance the WAL log. Here, it's just a query; retrieving the LSN is
@@ -380,6 +404,25 @@ public class PostgresSourceReader extends JdbcIncrementalSourceReader {
                     e.getMessage(),
                     e);
         }
+    }
+
+    /**
+     * Strip lsn_proc and lsn_commit from the binlog state offset before it is passed to debezium's
+     * WalPositionLocator. In pgoutput non-streaming mode (proto_version=1, used by debezium 1.9.x
+     * even on PG14), BEGIN and DML messages within a transaction share the same XLogData.data_start
+     * as the transaction's begin_lsn. When begin_lsn equals the previous transaction's commit_lsn
+     * (i.e. no other WAL write exists between them), WalPositionLocator adds that lsn to lsnSeen
+     * during the find phase and then incorrectly filters the DML as already-processed during actual
+     * streaming. Removing these keys sets lastCommitStoredLsn=null, so the find phase exits
+     * immediately at the first received message and switch-off happens before any DML is filtered.
+     * See https://issues.apache.org/jira/browse/FLINK-39265.
+     */
+    @Override
+    public Map<String, String> extractBinlogStateOffset(Object splitState) {
+        Map<String, String> offset = super.extractBinlogStateOffset(splitState);
+        offset.remove(PostgresOffsetContext.LAST_COMPLETELY_PROCESSED_LSN_KEY);
+        offset.remove(PostgresOffsetContext.LAST_COMMIT_LSN_KEY);
+        return offset;
     }
 
     @Override
