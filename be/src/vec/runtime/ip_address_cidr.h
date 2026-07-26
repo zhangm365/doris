@@ -126,7 +126,7 @@ inline bool match_ipv6_subnet(const uint8_t* addr, const uint8_t* cidr_addr, uin
         if (prefix / 8 != offset) {
             return prefix / 8 < offset;
         }
-        auto cmpmask = ~(0xff >> (prefix % 8));
+        auto cmpmask = static_cast<uint8_t>(~(0xff >> (prefix % 8)));
         return (addr[IPV6_BINARY_LENGTH - 1 - offset] & cmpmask) ==
                (cidr_addr[IPV6_BINARY_LENGTH - 1 - offset] & cmpmask);
     } else {
