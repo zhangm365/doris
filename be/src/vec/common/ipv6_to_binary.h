@@ -39,7 +39,7 @@ static constexpr RawMaskArrayV6 generate_bit_mask(size_t prefix) {
         arr[i] = 0xff;
     }
     if (prefix > 0) {
-        arr[i--] = static_cast<uint8_t>(~(0xff >> prefix));
+        arr[i--] = static_cast<uint8_t>(~(0xff >> prefix) & 0xff);
     }
     while (i >= 0) {
         arr[i--] = 0x00;
