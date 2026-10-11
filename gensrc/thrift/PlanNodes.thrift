@@ -317,6 +317,7 @@ struct TIcebergDeleteFileDesc {
     9: optional string original_path;
     // Referenced data file path. Required to materialize rows from deletion vectors.
     10: optional string referenced_data_file_path;
+    11: optional i64 file_size;
 }
 
 struct TIcebergFileDesc {
@@ -356,6 +357,7 @@ enum TPaimonReaderType {
     PAIMON_JNI = 1,
     // Deprecated wire value kept during rolling upgrades. New plans never emit it.
     PAIMON_CPP = 2,
+    PAIMON_RUST = 3,
 }
 
 struct TPaimonFileDesc {
@@ -377,6 +379,12 @@ struct TPaimonFileDesc {
     16: optional i64 schema_id; // for schema change.
     // Reader implementation for logical paimon split. Native file split uses range format type.
     17: optional TPaimonReaderType reader_type;
+    // paimon-rust: TableSchema serialized via JsonSerdeUtil.toJson(table.schema()).
+    // Consumed by paimon_table_from_schema_json on BE; skips catalog/warehouse resolution.
+    18: optional string paimon_table_schema_json
+    // paimon-rust: non-default branch name. Unset means main branch (matches
+    // upstream paimon commit 742da63: null-if-DEFAULT_MAIN_BRANCH).
+    19: optional string paimon_branch
 }
 
 struct TTrinoConnectorFileDesc {
@@ -467,6 +475,8 @@ struct TSearchVector {
     1: optional TVectorElementType element_type
     2: optional i32 dimension
     3: optional binary values
+    // Present only for one multi-vector query; values contains a row-major matrix.
+    4: optional i32 num_vectors
 }
 
 // Logical result parameters for one vector query. `top_k` is the number of rows returned after
@@ -477,6 +487,9 @@ struct TVectorSearchParams {
     3: optional i64 top_k
     4: optional i64 offset
     5: optional TVectorMetric metric
+    // FLOAT bounds: inclusive lower and exclusive upper.
+    6: optional double distance_lower_bound
+    7: optional double distance_upper_bound
 }
 
 enum TFtsCoverageMode {
@@ -528,8 +541,9 @@ enum TSearchFilterFormat {
     SUBSTRAIT
 }
 
-// A search filter is evaluated before candidate selection. A normal SQL predicate above the search
-// relation remains a post-search filter and is not serialized here.
+// A TVF search filter is evaluated by the search provider. TExternalSearchRequest.prefilter
+// controls whether Lance applies it before or after vector/FTS candidate selection. A normal SQL
+// predicate above the search relation remains a Doris residual.
 struct TSearchFilter {
     1: optional TSearchFilterFormat format
     2: optional binary payload
@@ -542,6 +556,8 @@ struct TVectorSearchOptions {
     2: optional i32 refine_factor
     3: optional i32 ef
     4: optional bool use_index
+    // Lance: -1 uses available CPU parallelism, 0 selects automatically, positive values cap it.
+    5: optional i32 query_parallelism
 }
 
 // The active union field identifies the logical search kind. A future hybrid field can contain both
@@ -558,6 +574,9 @@ struct TExternalSearchRequest {
     2: optional TExternalSearchQuery search_query
     3: optional TSearchFilter search_filter
     4: optional TVectorSearchOptions vector_search_options
+    // Applies only to search_filter. Defaults to false (postfilter); Doris WHERE predicates remain
+    // residuals regardless of this setting.
+    5: optional bool prefilter
 }
 
 // A catalog/S3 range reads fragments from a fixed snapshot. A local TVF range uses version zero
@@ -570,10 +589,15 @@ struct TLanceFileDesc {
     // most this many rows; the upper LIMIT operator still enforces the global bound.
     // Only set for ordinary scans whose predicates are fully pushed into Lance.
     4: optional i64 limit
-    // Physical vector or FTS index segments assigned to this distributed search split. Each value
-    // is one UUID encoded as 16 bytes in RFC 4122 order. Unset for ordinary and vector
-    // unindexed-fragment scans.
+    // Physical index segments assigned to this split. Each UUID is 16 bytes in RFC 4122 order.
+    // An ordinary scan accepts exactly one scalar segment and requires a fixed version and
+    // nonempty fragment_ids. Vector/FTS scans interpret these as their own index segments.
+    // Unset for fragment scans without an assigned segment.
     5: optional list<binary> index_segment_uuids
+    // Ordinary scans only. False for uncovered-fragment tasks in a scalar segment plan,
+    // so these tasks filter their rows without repeating global scalar-index evaluation.
+    // Unset preserves Lance's default; an explicit scalar segment must not be combined with false.
+    6: optional bool use_scalar_index
 }
 
 struct TLanceScanParams {
@@ -691,8 +715,19 @@ struct TFileScanRangeParams {
     34: optional i32 iceberg_scan_semantics_version
     // FE-generated identity for sharing a deserialized table across JNI scanners in one scan node.
     35: optional string serialized_table_cache_key
-    // 31-33 and 36 are used in master; do not allocate them in branch-4.1.
+    // HMS catalog property hive.parquet.time-zone. Interpretation is versioned by
+    // parquet_timestamp_semantics_version.
+    36: optional string hive_parquet_time_zone
+    // 31-33 are used in master; do not allocate them in branch-4.1.
     37: optional TLanceScanParams lance_scan_params
+    // Non-regular columns in the pinned full schema, including columns pruned from phase one.
+    // When present, omitted names are REGULAR. Used to rebuild row-id fetch projections.
+    38: optional map<string, TColumnCategory> column_name_to_category
+    // If both this marker and the timezone are absent, preserve legacy session-timezone decoding.
+    // Version 1 makes an absent/empty hive_parquet_time_zone explicitly disable INT96 conversion.
+    39: optional i32 parquet_timestamp_semantics_version
+    // Hybrid Paimon/Hudi scans keep FORMAT_JNI while individual ranges can be native Parquet.
+    40: optional bool contains_native_parquet
 }
 
 struct TFileRangeDesc {

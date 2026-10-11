@@ -28,6 +28,24 @@ every "indexed" query in test_lance_vector_search silently ran a flat KNN scan.
 The generated catalog contains:
   - __manifest            Directory Namespace V2 manifest table (with its scalar indexes).
   - all_types.lance       The pre-existing compatibility-mode root table, re-registered as-is.
+  - nested_null.lance     Nullable Null leaves inside lists, structs, and maps.
+  - time_travel.lance     Three uncompacted versions for FOR VERSION / TIME AS OF; carried
+                          over as-is because the suites hard-code its commit times
+                          (see lance_build_time_travel.py).
+  - search_snapshot.lance, search_snapshot_pruned.lance
+                          Index history, tags and a branch for the search TVFs' snapshot
+                          selectors; carried over as-is for the same reason
+                          (see lance_build_search_snapshot.py).
+  - search_snapshot_evolved.lance
+                          A column added and renamed after the vector index; rebuilt, since
+                          no suite depends on its commit times.
+  - legacy_vector_index.lance
+                          A vector index written by pylance 0.18.2, without index details;
+                          carried over as-is because this writer cannot rebuild it
+                          (see lance_build_legacy_vector_index.py).
+  - unicode_branch.lance
+                          A branch named with a letter newer than the JDK's Unicode, written by
+                          pylance 12.0.0; carried over as-is (see lance_build_unicode_branch.py).
   - The `doris` namespace with two full-text-search fixtures, one indexed vector table per cell of the
     algorithm x element type x metric matrix (hash-prefixed directories), listed in
     VECTOR_TABLES below; BREADTH_TABLE, one table carrying the remaining cells at plan
@@ -85,6 +103,21 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pyarrow.ipc as ipc
+from lance_build_array_predicates import build as build_array_predicates, check as check_array_predicates
+from lance_build_legacy_vector_index import LEGACY_DIR as LEGACY_VECTOR_INDEX_DIR
+from lance_build_legacy_vector_index import check as check_legacy_vector_index
+from lance_build_multivector import build as build_multivector, check as check_multivector
+from lance_build_nested_null import build as build_nested_null, check as check_nested_null
+from lance_build_search_snapshot import (
+    EVOLVED_DIR as SEARCH_SNAPSHOT_EVOLVED_DIR,
+    MAIN_DIR as SEARCH_SNAPSHOT_DIR,
+    PRUNED_DIR as SEARCH_SNAPSHOT_PRUNED_DIR,
+    build_evolved as build_search_snapshot_evolved,
+    check as check_search_snapshot,
+)
+from lance_build_time_travel import check as check_time_travel
+from lance_build_unicode_branch import UNICODE_BRANCH_DIR
+from lance_build_unicode_branch import check as check_unicode_branch
 from lance_namespace_urllib3_client.models import (
     CreateNamespaceRequest,
     CreateTableRequest,
@@ -99,6 +132,8 @@ FRAGMENT_ROWS = 512
 NUM_PARTITIONS = 4
 NAMESPACE = "doris"
 ALL_TYPES_DIR = "all_types.lance"
+NESTED_NULL_DIR = "nested_null.lance"
+TIME_TRAVEL_DIR = "time_travel.lance"
 MANIFEST_DIR = "__manifest"
 
 # 4-bit PQ keeps codebook training comfortable on 1024 rows. This only serves fixture
@@ -385,7 +420,6 @@ VECTOR_TABLES = {
     },
 }
 
-
 # ---------------------------------------------------------------------------
 # Breadth tier
 # ---------------------------------------------------------------------------
@@ -394,16 +428,13 @@ VECTOR_TABLES = {
 # reached the index. That costs roughly 190KB per cell, so the tier deliberately covers one
 # representative cell per axis rather than the whole matrix.
 #
-# The breadth tier covers everything the depth tier leaves out, at plan level only. It is a
-# single table carrying one vector column per remaining cell, each with exactly one index -
-# one column per cell, never several indexes on one column, because only the first index
-# built on a column is reachable. Measured on Lance: with a cosine and a dot index on one
-# column, whichever was created first answers its metric from the index and the other falls
-# back to a silent brute-force scan. Doris lands in the same place by a different route -
-# LanceScanNode.selectIndexSegments keeps only the segments of the first index it finds for
-# the column's field id, so the second index is invisible to the planner and metricMatches
-# then rejects the query whose metric it does not carry. Either way a column is the unit that
-# can hold a testable index, and 64 rows is enough to train one.
+# The breadth tier covers every remaining cell at plan level only.
+# It is a single table carrying one vector column per remaining cell, each with exactly one
+# index. Keeping one index per column isolates every type x metric x algorithm cell;
+# same-column multi-index selection is covered by LanceScanNodeTest's metadata fixtures. A
+# column is not limited to one logical vector index: Doris groups physical segments by index
+# name and picks the first lexicographic group that matches the requested metric and can safely
+# plan splits. Sixty-four rows are enough to train each matrix index.
 #
 # What this tier proves is narrower than the depth tier's, and the documentation must not
 # conflate them: it shows Doris plans an indexed split and the backend answers it, NOT that
@@ -918,7 +949,8 @@ def build_multi_frag(root: Path) -> None:
     location = str(root / MULTI_FRAG_DIR)
     for index in range(MULTI_FRAG_NUM_FRAGMENTS):
         offset = index * MULTI_FRAG_FRAGMENT_ROWS
-        fragment = make_fragment_table(offset, offset + MULTI_FRAG_FRAGMENT_ROWS)
+        # The shared builder requires a vector profile even though embedding is dropped below.
+        fragment = make_fragment_table(COLLINEAR, pa.float32(), offset, offset + MULTI_FRAG_FRAGMENT_ROWS)
         fragment = fragment.drop_columns(["embedding"])
         # Match all_types.lance (data storage version 2.2) so every committed Lance data file
         # shares one on-disk format and the oldest reader (lance-rs 4.0.1) can open it.
@@ -930,9 +962,17 @@ def build_multi_frag(root: Path) -> None:
     lance.dataset(location).delete(f"row_id in ({deleted})")
 
 
-def build(root: Path, all_types_source: Path) -> None:
+def build(root: Path, all_types_source: Path, time_travel_source: Path, carried_root: Path) -> None:
     shutil.copytree(all_types_source, root / ALL_TYPES_DIR)
+    # Not rebuilt: their commit times are hard-coded in the time-travel and search-snapshot suites.
+    shutil.copytree(time_travel_source, root / TIME_TRAVEL_DIR)
+    for name in (SEARCH_SNAPSHOT_DIR, SEARCH_SNAPSHOT_PRUNED_DIR, LEGACY_VECTOR_INDEX_DIR, UNICODE_BRANCH_DIR):
+        shutil.copytree(carried_root / name, root / name)
+    build_search_snapshot_evolved(root / SEARCH_SNAPSHOT_EVOLVED_DIR)
     build_multi_frag(root)
+    # Recreate this fixture in staging because promotion replaces the entire catalog tree.
+    build_nested_null(root / NESTED_NULL_DIR)
+    build_multivector(root / "multivector.lance")
     namespace = lance_namespace.connect("dir", {"root": str(root)})
     namespace.register_table(
         RegisterTableRequest(id=["all_types"], location=ALL_TYPES_DIR)
@@ -1660,6 +1700,8 @@ def check_fts_dataset(location: str, *, table_name: str, index_name: str,
 
 
 def check_catalog(root: Path) -> None:
+    # The SQL pushdown suite also relies on these independently published datasets.
+    check_array_predicates(root / "predicate_arrays")
     check_data_shapes()
     namespace = lance_namespace.connect("dir", {"root": str(root)})
     tables = namespace.list_tables(ListTablesRequest(id=[NAMESPACE]))
@@ -1721,6 +1763,12 @@ def check_catalog(root: Path) -> None:
     assert nested_path.is_dir(), f"{NESTED_TABLE} location missing: {nested.location}"
     check_nested_dataset(nested.location)
     check_multi_frag(root)
+    check_nested_null(root / NESTED_NULL_DIR)
+    check_time_travel(root / TIME_TRAVEL_DIR)
+    check_search_snapshot(root)
+    check_legacy_vector_index(root / LEGACY_VECTOR_INDEX_DIR)
+    check_unicode_branch(root / UNICODE_BRANCH_DIR)
+    check_multivector(root / "multivector.lance")
 
     full_fts = namespace.describe_table(DescribeTableRequest(id=[NAMESPACE, FTS_TABLE]))
     check_fts_dataset(
@@ -1787,11 +1835,20 @@ def main() -> int:
     if not all_types_source.is_dir():
         print(f"missing all_types source: {all_types_source}", file=sys.stderr)
         return 1
+    time_travel_source = output / TIME_TRAVEL_DIR
+    if not time_travel_source.is_dir():
+        print(f"missing time_travel source: {time_travel_source}", file=sys.stderr)
+        return 1
+    for name in (SEARCH_SNAPSHOT_DIR, SEARCH_SNAPSHOT_PRUNED_DIR, LEGACY_VECTOR_INDEX_DIR, UNICODE_BRANCH_DIR):
+        if not (output / name).is_dir():
+            print(f"missing carried-over source: {output / name}", file=sys.stderr)
+            return 1
 
     with tempfile.TemporaryDirectory(prefix="lance_fixture_") as staging_name:
         staging = Path(staging_name) / "lance"
         staging.mkdir()
-        build(staging, all_types_source)
+        build(staging, all_types_source, time_travel_source, output)
+        build_array_predicates(staging / "predicate_arrays")
         check_catalog(staging)
         backup = output.with_name(output.name + ".old")
         if backup.exists():

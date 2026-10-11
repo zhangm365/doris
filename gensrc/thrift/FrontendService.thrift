@@ -433,6 +433,10 @@ struct TMasterOpRequest {
     1002: optional string sessionId
     // propagate client's CLIENT_DEPRECATE_EOF capability for proxy forwarding
     1003: optional bool clientDeprecatedEOF
+    // Whether COM_STMT_EXECUTE requested CURSOR_TYPE_READ_ONLY.
+    1008: optional bool cursor_fetch_requested
+    // Capabilities negotiated with the original MySQL client.
+    1009: optional i32 mysql_capability
 }
 
 struct TColumnDefinition {
@@ -464,6 +468,8 @@ struct TMasterOpResult {
     9: optional TTxnLoadInfo txnLoadInfo;
     10: optional i64 groupCommitLoadBeId;
     11: optional i64 affectedRows;
+    // Confirms that the executing FE serialized raw MySQL packets with CLIENT_DEPRECATE_EOF.
+    13: optional bool clientDeprecatedEofApplied;
 }
 
 // Certificate-based authentication info forwarded from BE to FE
@@ -1928,4 +1934,7 @@ service FrontendService {
     TGetOlapTableMetaResult getOlapTableMeta(1: TGetOlapTableMetaRequest request)
 
     Status.TStatus syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
+
+    // Result buffers can outlive their local fragments; abort through the owning FE's query-level route.
+    Status.TStatus cancelFlightQuery(1: Types.TUniqueId result_id)
 }

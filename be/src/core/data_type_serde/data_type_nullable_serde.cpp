@@ -31,6 +31,7 @@
 #include "core/column/column_const.h"
 #include "core/column/column_nullable.h"
 #include "core/column/column_vector.h"
+#include "core/data_type/data_type_nullable.h"
 #include "core/data_type_serde/arrow_validation.h"
 #include "core/data_type_serde/data_type_serde.h"
 #include "core/data_type_serde/data_type_string_serde.h"
@@ -385,10 +386,44 @@ Status DataTypeNullableSerDe::write_column_to_arrow(const IColumn& column, const
                                                start, end, ctz);
 }
 
+Status DataTypeNullableSerDe::write_column_to_paimon_arrow(
+        const std::shared_ptr<const IDataType>& type, const IColumn& column, const NullMap*,
+        const std::shared_ptr<arrow::Field>& field, arrow::ArrayBuilder* array_builder,
+        int64_t start, int64_t end, const cctz::time_zone& ctz) const {
+    const auto& nullable_type = assert_cast<const DataTypeNullable&>(*type);
+    const auto& column_nullable = assert_cast<const ColumnNullable&>(column);
+    return nested_serde->write_column_to_paimon_arrow(
+            nullable_type.get_nested_type(), column_nullable.get_nested_column(),
+            &column_nullable.get_null_map_data(), field, array_builder, start, end, ctz);
+}
+
+Status DataTypeNullableSerDe::write_column_to_iceberg_arrow(
+        const std::shared_ptr<const IDataType>& type, const IColumn& column, const NullMap*,
+        const std::shared_ptr<arrow::Field>& field, arrow::ArrayBuilder* array_builder,
+        int64_t start, int64_t end, const cctz::time_zone& ctz) const {
+    const auto& nullable_type = assert_cast<const DataTypeNullable&>(*type);
+    const auto& column_nullable = assert_cast<const ColumnNullable&>(column);
+    return nested_serde->write_column_to_iceberg_arrow(
+            nullable_type.get_nested_type(), column_nullable.get_nested_column(),
+            &column_nullable.get_null_map_data(), field, array_builder, start, end, ctz);
+}
+
 Status DataTypeNullableSerDe::read_column_from_arrow(IColumn& column,
                                                      const arrow::Array* arrow_array, int64_t start,
                                                      int64_t end,
                                                      const cctz::time_zone& ctz) const {
+    if (arrow_array->type_id() == arrow::Type::NA) {
+        // Arrow Null has neither a validity bitmap nor values, even when sliced. Avoid the
+        // physical SerDe for Doris's UInt8 placeholder and keep nested values and nulls aligned.
+        if (arrow_array->offset() < 0 || start < 0 || end < start || end > arrow_array->length()) {
+            return Status::InvalidArgument(
+                    "Invalid Arrow Null read range: start={}, end={}, "
+                    "length={}, offset={}",
+                    start, end, arrow_array->length(), arrow_array->offset());
+        }
+        column.insert_many_defaults(end - start);
+        return Status::OK();
+    }
     if (config::enable_arrow_input_validation) {
         check_arrow_array_range(*arrow_array, start, end);
         check_arrow_validity_bitmap(*arrow_array);

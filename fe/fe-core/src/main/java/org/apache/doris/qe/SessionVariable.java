@@ -578,6 +578,10 @@ public class SessionVariable implements Serializable, Writable {
     // Split size for ExternalFileScanNode. Default value 0 means use the block size of HDFS/S3.
     public static final String FILE_SPLIT_SIZE = "file_split_size";
 
+    public static final String LANCE_FRAGMENTS_PER_SPLIT = "lance_fragments_per_split";
+
+    public static final String ENABLE_LANCE_LAZY_MATERIALIZATION = "enable_lance_lazy_materialization";
+
     public static final String FILE_SPLIT_SIZE_ON_FE = "file_split_size_on_fe";
 
     public static final String FILE_SPLIT_SIZE_ON_BE = "file_split_size_on_be";
@@ -812,6 +816,8 @@ public class SessionVariable implements Serializable, Writable {
 
     public static final String FORCE_JNI_SCANNER = "force_jni_scanner";
 
+    public static final String ENABLE_PAIMON_RUST_READER = "enable_paimon_rust_reader";
+
     public static final String ENABLE_COUNT_PUSH_DOWN_FOR_EXTERNAL_TABLE = "enable_count_push_down_for_external_table";
 
     public static final String FETCH_ALL_FE_FOR_SYSTEM_TABLE = "fetch_all_fe_for_system_table";
@@ -835,6 +841,8 @@ public class SessionVariable implements Serializable, Writable {
     public static final String ENABLE_EXTENDED_REGEX = "enable_extended_regex";
 
     public static final String SHORT_CIRCUIT_EVALUATION = "short_circuit_evaluation";
+
+    public static final String ENABLE_HYPERSCAN_FALLBACK = "enable_hyperscan_fallback";
 
     public static final String CLOUD_PARTITIONS_TABLE_USE_CACHED_VISIBLE_VERSION =
             "cloud_partitions_table_use_cached_visible_version";
@@ -1490,7 +1498,7 @@ public class SessionVariable implements Serializable, Writable {
                     "Use consistent hashing to split the appearance for external scan"})
     public boolean useConsistentHashForExternalScan = false;
 
-    @VariableMgr.VarAttr(name = PROFILE_LEVEL, fuzzy = false,
+    @VariableMgr.VarAttr(name = PROFILE_LEVEL, fuzzy = false, needForward = true,
             setter = "setProfileLevel", checker = "checkProfileLevel",
             description = { "查询 profile 的级别，1 表示只收集 MergedProfile 级别的 Counter，2 表示打印详细信息，"
                             + "3 表示打开一些可能导致性能回退的 Counter", "The level of query profile, "
@@ -2394,7 +2402,7 @@ public class SessionVariable implements Serializable, Writable {
                     + "如果 be.conf 中 enable_file_cache=false，该 BE 节点的 file cache 处于禁用状态。",
             "Set wether to use file cache. This variable takes effect only if the BE config enable_file_cache=true. "
                     + "The cache is not used when BE config enable_file_cache=false."})
-    public boolean enableFileCache = false;
+    public boolean enableFileCache = true;
 
     // Specify base path for file cache, or chose a random path.
     @VariableMgr.VarAttr(name = FILE_CACHE_BASE_PATH, needForward = true, description = {
@@ -2572,6 +2580,25 @@ public class SessionVariable implements Serializable, Writable {
 
     @VariableMgr.VarAttr(name = FILE_SPLIT_SIZE, needForward = true)
     public long fileSplitSize = 0;
+
+    @VariableMgr.VarAttr(name = LANCE_FRAGMENTS_PER_SPLIT, needForward = true,
+            flag = VariableMgr.INVISIBLE, fuzzy = false,
+            checker = "checkLanceFragmentsPerSplit", description = {
+                    "普通 Lance 扫描的调试参数。默认 0 自动划分；正数强制按指定 fragment 数分组，"
+                            + "跳过标量索引 segment 扫描和补足 BE 数量的逻辑。不影响 vector/FTS 查询。",
+                    "Debug override for ordinary Lance scans. Default 0 uses automatic splitting; "
+                            + "a positive value groups that many fragments per split, bypassing scalar segment scans "
+                            + "and minimum BE parallelism. Does not affect vector/FTS queries."})
+    public int lanceFragmentsPerSplit = 0;
+
+    @VariableMgr.VarAttr(name = ENABLE_LANCE_LAZY_MATERIALIZATION, needForward = true,
+            description = {
+                    "是否启用 Lance 两阶段延迟读取，默认开启，不受 topn_lazy_materialization_threshold 控制。"
+                            + "当前支持 vector_search 和 full_text_search 中可安全延迟读取的列。",
+                    "Enable Lance two-phase lazy materialization, "
+                            + "independently of topn_lazy_materialization_threshold. "
+                            + "Enabled by default for eligible columns in vector_search and full_text_search."})
+    public boolean enableLanceLazyMaterialization = true;
 
     @VariableMgr.VarAttr(name = FILE_SPLIT_SIZE_ON_FE, needForward = true, description = {
             "支持 BE 细粒度切分时，FE 粗粒度文件分片的目标大小，单位为字节，默认为 512MB",
@@ -3082,6 +3109,12 @@ public class SessionVariable implements Serializable, Writable {
             fuzzy = true,
             description = {"强制使用 jni 方式读取外表", "Force the use of jni mode to read external table"})
     private boolean forceJniScanner = false;
+
+    @VariableMgr.VarAttr(name = ENABLE_PAIMON_RUST_READER,
+            fuzzy = true,
+            description = {"Paimon 非原生文件读取使用 paimon-rust,优先级高于 paimon-cpp",
+                    "Use paimon-rust for non-native Paimon reads, higher priority than paimon-cpp"})
+    private boolean enablePaimonRustReader = false;
 
     @VariableMgr.VarAttr(name = ENABLE_COUNT_PUSH_DOWN_FOR_EXTERNAL_TABLE,
             fuzzy = true,
@@ -3747,6 +3780,10 @@ public class SessionVariable implements Serializable, Writable {
                     "Enable extended regular expressions, support look-around zero-width assertions"})
     public boolean enableExtendedRegex = false;
 
+    @VariableMgr.VarAttr(name = ENABLE_HYPERSCAN_FALLBACK, needForward = true, affectQueryResultInExecution = true,
+            description = "Whether to fall back to RE2 when Hyperscan cannot compile a regular expression")
+    public boolean enableHyperscanFallback = true;
+
     @VariableMgr.VarAttr(
             name = DEFAULT_VARIANT_SPARSE_HASH_SHARD_COUNT,
             needForward = true,
@@ -4001,6 +4038,8 @@ public class SessionVariable implements Serializable, Writable {
 
         // jni
         this.forceJniScanner = random.nextBoolean();
+        this.enablePaimonRustReader = random.nextBoolean();
+
         // statistics
         this.fetchHiveRowCountSync = random.nextBoolean();
 
@@ -5795,6 +5834,7 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setEnableOrcFilterByMinMax(enableOrcFilterByMinMax);
         tResult.setEnableExprZonemapFilter(enableExprZonemapFilter);
         tResult.setFilePresignedUrlTtlSeconds(filePresignedUrlTtlSeconds);
+        tResult.setEnablePaimonRustReader(enablePaimonRustReader);
         tResult.setCheckOrcInitSargsSuccess(checkOrcInitSargsSuccess);
 
         tResult.setTruncateCharOrVarcharColumns(truncateCharOrVarcharColumns);
@@ -5895,7 +5935,7 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setAnnIndexCandidateRowsPercentThreshold(annIndexCandidateRowsPercentThreshold);
         tResult.setMergeReadSliceSize(mergeReadSliceSizeBytes);
         tResult.setEnableExtendedRegex(enableExtendedRegex);
-
+        tResult.setEnableHyperscanFallback(enableHyperscanFallback);
         if (fileCacheQueryLimitPercent > 0) {
             tResult.setFileCacheQueryLimitPercent(Math.min(fileCacheQueryLimitPercent,
                     Config.file_cache_query_limit_max_percent));
@@ -6417,6 +6457,12 @@ public class SessionVariable implements Serializable, Writable {
     }
 
 
+    public void checkLanceFragmentsPerSplit(String value) {
+        if (Integer.parseInt(value) < 0) {
+            throw new InvalidParameterException("lance_fragments_per_split must be non-negative");
+        }
+    }
+
     private static final long PREFERRED_BLOCK_SIZE_BYTES_MIN = 1048576L;      // 1MB
     private static final long PREFERRED_BLOCK_SIZE_BYTES_MAX = 536870912L;    // 512MB
 
@@ -6590,6 +6636,10 @@ public class SessionVariable implements Serializable, Writable {
         return forceJniScanner;
     }
 
+    public boolean isEnablePaimonRustReader() {
+        return enablePaimonRustReader;
+    }
+
     public String getIgnoreSplitType() {
         return ignoreSplitType;
     }
@@ -6611,6 +6661,10 @@ public class SessionVariable implements Serializable, Writable {
 
     public void setForceJniScanner(boolean force) {
         forceJniScanner = force;
+    }
+
+    public void setEnablePaimonRustReader(boolean enable) {
+        enablePaimonRustReader = enable;
     }
 
     public boolean isEnableCountPushDownForExternalTable() {

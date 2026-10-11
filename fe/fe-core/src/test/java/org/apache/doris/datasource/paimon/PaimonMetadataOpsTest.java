@@ -26,6 +26,7 @@ import org.apache.doris.datasource.CatalogFactory;
 import org.apache.doris.datasource.ExternalCatalog;
 import org.apache.doris.datasource.ExternalDatabase;
 import org.apache.doris.datasource.ExternalTable;
+import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.commands.CreateCatalogCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateTableCommand;
@@ -248,6 +249,29 @@ public class PaimonMetadataOpsTest {
     }
 
     @Test
+    public void testDatabaseExistBypassesCacheAndPreservesLookupSemantics() throws Exception {
+        Catalog remoteCatalog = Mockito.mock(Catalog.class);
+        ExternalCatalog dorisCatalog = Mockito.mock(ExternalCatalog.class);
+        PaimonMetadataOps metadataOps = newMetadataOps(dorisCatalog, remoteCatalog);
+        Mockito.when(remoteCatalog.listDatabases()).thenReturn(Arrays.asList("db1", "db2"));
+        Mockito.when(remoteCatalog.caseSensitive()).thenReturn(false);
+
+        Assert.assertTrue(metadataOps.databaseExist("db1"));
+        Assert.assertTrue(metadataOps.databaseExist("DB1"));
+        Assert.assertTrue(metadataOps.databaseExist(Catalog.SYSTEM_DATABASE_NAME));
+        Assert.assertFalse(metadataOps.databaseExist("SYS"));
+        Assert.assertFalse(metadataOps.databaseExist("dropped_db"));
+
+        Mockito.when(remoteCatalog.caseSensitive()).thenReturn(true);
+        Assert.assertTrue(metadataOps.databaseExist("db1"));
+        Assert.assertFalse(metadataOps.databaseExist("DB1"));
+        Assert.assertTrue(metadataOps.databaseExist(Catalog.SYSTEM_DATABASE_NAME));
+        Assert.assertFalse(metadataOps.databaseExist("SYS"));
+
+        Mockito.verify(remoteCatalog, Mockito.never()).getDatabase(Mockito.anyString());
+    }
+
+    @Test
     public void testType() throws Exception {
         String tableName = getTableName();
         Identifier identifier = new Identifier(dbName, tableName);
@@ -313,6 +337,64 @@ public class PaimonMetadataOpsTest {
         Assert.assertEquals(1, table.partitionKeys().size());
         Assert.assertTrue(table.primaryKeys().contains("c0"));
         Assert.assertEquals(1, table.primaryKeys().size());
+    }
+
+    @Test
+    public void testRejectPartitionExpressionsBeforeCreatingTable() throws Exception {
+        for (String partitionClause : Arrays.asList(
+                "auto partition by range(date_trunc(ts, 'day')) ()",
+                "auto partition by list(date_trunc(ts, 'day')) ()",
+                "partition by (date_trunc(ts, 'day')) ()",
+                "partition by (dt, date_trunc(ts, 'day')) ()")) {
+            assertPartitionRejected(partitionClause, "Paimon only supports partitioning by columns");
+        }
+    }
+
+    @Test
+    public void testRejectPartitionDefinitionsBeforeCreatingTable() throws Exception {
+        for (String partitionClause : Arrays.asList(
+                "partition by range(dt) (partition p1 values less than ('2026-01-02'))",
+                "partition by range(dt) (partition p1 values [('2026-01-01'), ('2026-01-02')))",
+                "partition by list(dt) (partition p1 values in ('2026-01-01'))",
+                "partition by range(dt) (from ('2026-01-01') to ('2026-01-03') interval 1 day)",
+                "auto partition by range(dt) (partition p1 values less than ('2026-01-02'))")) {
+            assertPartitionRejected(partitionClause, "Paimon does not support explicit partition definitions");
+        }
+    }
+
+    private void assertPartitionRejected(String partitionClause, String message) throws Exception {
+        String tableName = getTableName();
+        String sql = "create table " + dbName + "." + tableName
+                + " (id int, ts datetime not null, dt date not null) engine = paimon " + partitionClause;
+        AnalysisException exception = Assert.assertThrows(AnalysisException.class, () -> createTable(sql));
+        Assert.assertTrue(exception.getMessage(), exception.getMessage().contains(message));
+        Assert.assertThrows(Catalog.TableNotExistException.class,
+                () -> ops.getCatalog().getTable(new Identifier(dbName, tableName)));
+    }
+
+    @Test
+    public void testIdentityPartitionSyntaxes() throws Exception {
+        for (String partitionClause : Arrays.asList(
+                "partition by (dt) ()",
+                "partition by range(dt) ()",
+                "partition by list(dt) ()",
+                "auto partition by range(dt) ()",
+                "auto partition by list(dt) ()")) {
+            String tableName = getTableName();
+            createTable("create table " + dbName + "." + tableName
+                    + " (id int, dt date not null) engine = paimon " + partitionClause);
+            Assert.assertEquals(Arrays.asList("dt"),
+                    ops.getCatalog().getTable(new Identifier(dbName, tableName)).partitionKeys());
+        }
+    }
+
+    @Test
+    public void testMultipleIdentityPartitionColumns() throws Exception {
+        String tableName = getTableName();
+        createTable("create table " + dbName + "." + tableName
+                + " (id int, region string, dt date not null) engine = paimon partition by (region, dt) ()");
+        Assert.assertEquals(Arrays.asList("region", "dt"),
+                ops.getCatalog().getTable(new Identifier(dbName, tableName)).partitionKeys());
     }
 
     @Test
@@ -468,6 +550,22 @@ public class PaimonMetadataOpsTest {
             Assert.assertTrue(t instanceof DdlException);
             Assert.assertTrue(t.getMessage().contains("database doesn't exist"));
         }
+    }
+
+    @Test
+    public void testDropDatabaseUsesResolvedNameForLeaderCleanup() throws Exception {
+        ExternalCatalog dorisCatalog = Mockito.mock(ExternalCatalog.class);
+        ExternalDatabase<?> resolvedDb = Mockito.mock(ExternalDatabase.class);
+        Mockito.when(resolvedDb.getFullName()).thenReturn("FOO");
+        Mockito.doReturn(resolvedDb).when(dorisCatalog).getDbNullable("Foo");
+        Catalog remoteCatalog = Mockito.mock(Catalog.class);
+        PaimonMetadataOps metadataOps = newMetadataOps(dorisCatalog, remoteCatalog);
+
+        Assert.assertEquals(Optional.of("FOO"), metadataOps.dropDbWithResolvedName("Foo", false, false));
+
+        Mockito.verify(remoteCatalog).dropDatabase("Foo", false, false);
+        Mockito.verify(dorisCatalog).unregisterDatabase("FOO");
+        Mockito.verify(dorisCatalog, Mockito.never()).unregisterDatabase("Foo");
     }
 
     @Test

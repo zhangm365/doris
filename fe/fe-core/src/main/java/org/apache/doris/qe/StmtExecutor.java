@@ -67,7 +67,9 @@ import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mysql.FieldInfo;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.mysql.MysqlCommand;
+import org.apache.doris.mysql.MysqlCursorFetchCompatibility;
 import org.apache.doris.mysql.MysqlEofPacket;
+import org.apache.doris.mysql.MysqlResultSetEndPacket;
 import org.apache.doris.mysql.MysqlSerializer;
 import org.apache.doris.mysql.ProxyMysqlChannel;
 import org.apache.doris.nereids.NereidsPlanner;
@@ -178,7 +180,7 @@ public class StmtExecutor {
 
     private static final Pattern beIpPattern = Pattern.compile("\\[(\\d+):");
     private ConnectContext context;
-    private final StatementContext statementContext;
+    private StatementContext statementContext;
     private MysqlSerializer serializer;
     private OriginStatement originStmt;
     private StatementBase parsedStmt;
@@ -1181,6 +1183,12 @@ public class StmtExecutor {
     }
 
     private void forwardToMaster() throws Exception {
+        // COM_QUERY forwarding carries SQL text but not Flight's typed placeholder bindings.
+        if (context.getConnectType() == ConnectType.ARROW_FLIGHT_SQL
+                && !statementContext.getIdToPlaceholderRealExpr().isEmpty()) {
+            throw new UserException("Flight SQL queries with bound parameters cannot be forwarded; "
+                    + "connect to master FE");
+        }
         masterOpExecutor = new MasterOpExecutor(originStmt, context, redirectStatus, isQuery());
         if (LOG.isDebugEnabled()) {
             LOG.debug("need to transfer to Master. stmt: {}", context.getStmtId());
@@ -1454,6 +1462,12 @@ public class StmtExecutor {
             if (context.getConnectType().equals(ConnectType.ARROW_FLIGHT_SQL)) {
                 Preconditions.checkState(!context.isReturnResultFromLocal());
                 profile.getSummaryProfile().setTempStartTime();
+                if (coordBase == coord) {
+                    context.getFlightSqlChannel().registerRemoteQuery(coord.getQueryId(),
+                            context.getFlightSqlEndpointsLocations().stream()
+                                    .map(endpoint -> endpoint.getFinstId()).distinct().collect(Collectors.toList()),
+                            coord.getBackendBrpcAddresses(), coord.getQueryOptions().getExecutionTimeout());
+                }
                 // The client pulls the results from the BE later (DoGet). Only an external-table
                 // scan in batch mode still needs the coordinator after this point: the BE fetches
                 // its splits lazily from the split source the coordinator holds, so closing the
@@ -1730,15 +1744,7 @@ public class StmtExecutor {
             }
             context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
         }
-        // When CLIENT_DEPRECATE_EOF is set, the server should not send the intermediate
-        // EOF packet after column definitions. The client will go directly from column
-        // definitions to reading data rows.
-        if (!context.getMysqlChannel().clientDeprecatedEOF()) {
-            serializer.reset();
-            MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
-            eofPacket.writeTo(serializer);
-            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
-        }
+        sendMetadataTerminatorIfNeeded(context.getMysqlChannel());
     }
 
     private List<PrimitiveType> exprToStringType(List<Expr> exprs) {
@@ -1864,15 +1870,28 @@ public class StmtExecutor {
                 context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
             }
         }
-        // When CLIENT_DEPRECATE_EOF is set, the server should not send the intermediate
-        // EOF packet after column definitions. The client will go directly from column
-        // definitions to reading data rows.
-        if (!context.getMysqlChannel().clientDeprecatedEOF()) {
+        sendMetadataTerminatorIfNeeded(context.getMysqlChannel());
+    }
+
+    private void sendMetadataTerminatorIfNeeded(MysqlChannel channel) throws IOException {
+        if (!channel.clientDeprecatedEOF()) {
             serializer.reset();
-            MysqlEofPacket eofPacket = new MysqlEofPacket(context.getState());
-            eofPacket.writeTo(serializer);
-            context.getMysqlChannel().sendOnePacket(serializer.toByteBuffer());
+            new MysqlEofPacket(context.getState()).writeTo(serializer);
+            channel.sendOnePacket(serializer.toByteBuffer());
+        } else if (connectorJConsumesCursorMetadataTerminator()) {
+            // Connector/J before 9.5 consumes the first OK packet after column definitions
+            // while probing whether a requested cursor was created. Doris does not create a
+            // cursor, so an empty result would otherwise lose its only end marker and block.
+            serializer.reset();
+            new MysqlResultSetEndPacket(context.getState()).writeTo(serializer);
+            channel.sendOnePacket(serializer.toByteBuffer());
         }
+    }
+
+    private boolean connectorJConsumesCursorMetadataTerminator() {
+        return context.isCursorFetchRequested()
+                && MysqlCursorFetchCompatibility.resolve(context.getConnectAttributes())
+                        != MysqlCursorFetchCompatibility.Behavior.STANDARD;
     }
 
     public void sendResultSet(ResultSet resultSet) throws IOException {
@@ -2087,6 +2106,16 @@ public class StmtExecutor {
         this.parsedStmt = parsedStmt;
         this.statementContext.setParsedStatement(parsedStmt);
         return parsedStmt;
+    }
+
+    /**
+     * Replace the executor statement context and synchronize it to the owning ConnectContext.
+     */
+    public void setStatementContext(StatementContext statementContext) {
+        this.statementContext = statementContext;
+        this.statementContext.setConnectContext(context);
+        this.statementContext.setOriginStatement(originStmt);
+        this.context.setStatementContext(statementContext);
     }
 
     public List<Slot> planPrepareStatementSlots() throws Exception {
@@ -2367,6 +2396,7 @@ public class StmtExecutor {
         if (masterOpExecutor == null) {
             return;
         }
+        masterOpExecutor.prepareQueryResultForClient();
         List<ByteBuffer> queryResultBufList = masterOpExecutor.getQueryResultBufList();
         for (ByteBuffer byteBuffer : queryResultBufList) {
             context.getMysqlChannel().sendOnePacket(byteBuffer);

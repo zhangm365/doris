@@ -1617,7 +1617,7 @@ bool CloudCompactionMixin::should_apply_cumulative_compaction_result(
     }
     if (response_cumulative_compaction_cnt != local_cumulative_compaction_cnt + 1) {
         // Only the current task's output is available locally. Sync all missing outputs instead.
-        cloud_tablet()->last_sync_time_s = 0;
+        cloud_tablet()->last_sync_rowsets_time_s = 0;
         LOG_INFO("defer applying cumulative compaction result until tablet sync")
                 .tag("tablet_id", _tablet->tablet_id())
                 .tag("job_id", _uuid)
@@ -1867,7 +1867,7 @@ Status CloudCompactionMixin::construct_output_rowset_writer(RowsetWriterContext&
     // TODO(gavin): Ensure that the retention of hot data is implemented with precision.
 
     ctx.write_file_cache = should_cache_compaction_output();
-    ctx.file_cache_ttl_sec = _tablet->ttl_seconds();
+    ctx.file_cache_expiration_time = _tablet->file_cache_ttl_expiration_time();
     ctx.approximate_bytes_to_write = _input_rowsets_total_size;
 
     // Set fine-grained control: only write index files to cache if configured

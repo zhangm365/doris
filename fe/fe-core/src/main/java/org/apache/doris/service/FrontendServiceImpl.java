@@ -93,6 +93,7 @@ import org.apache.doris.datasource.ExternalCatalog;
 import org.apache.doris.datasource.ExternalDatabase;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.datasource.SplitSource;
+import org.apache.doris.datasource.iceberg.IcebergExternalTable;
 import org.apache.doris.datasource.maxcompute.MCTransaction;
 import org.apache.doris.encryption.EncryptionKey;
 import org.apache.doris.ha.FrontendNodeType;
@@ -140,6 +141,7 @@ import org.apache.doris.qe.VariableMgr;
 import org.apache.doris.resource.BackendSelection;
 import org.apache.doris.resource.BackendSelectionManager;
 import org.apache.doris.service.arrowflight.FlightSqlConnectProcessor;
+import org.apache.doris.service.arrowflight.FlightSqlQueryCancellation;
 import org.apache.doris.statistics.AnalysisManager;
 import org.apache.doris.statistics.ColStatsData;
 import org.apache.doris.statistics.ColumnStatistic;
@@ -985,7 +987,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 if (table != null && !table.isTemporary()) {
                     table.readLock();
                     try {
-                        List<Column> baseSchema = table.getBaseSchemaOrEmpty();
+                        List<Column> baseSchema = getBaseSchemaForDisplayOrEmpty(table);
                         for (Column column : baseSchema) {
                             final TColumnDesc desc = getColumnDesc(column);
                             final TColumnDef colDef = new TColumnDef(desc);
@@ -1015,6 +1017,19 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             }
         }
         return result;
+    }
+
+    private List<Column> getBaseSchemaForDisplayOrEmpty(TableIf table) {
+        if (!(table instanceof IcebergExternalTable)) {
+            return table.getBaseSchemaOrEmpty();
+        }
+        try {
+            return ((IcebergExternalTable) table).getBaseSchemaForDisplay();
+        } catch (Exception e) {
+            // Keep the per-table failure handling of getBaseSchemaOrEmpty for metadata enumeration.
+            LOG.warn("failed to get display schema for table {}", table.getName(), e);
+            return Lists.newArrayList();
+        }
     }
 
     private TColumnDesc getColumnDesc(Column column) {
@@ -1076,6 +1091,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     @Override
     public TReportExecStatusResult reportExecStatus(TReportExecStatusParams params) throws TException {
         return QeProcessorImpl.INSTANCE.reportExecStatus(params, getClientAddr());
+    }
+
+    @Override
+    public TStatus cancelFlightQuery(TUniqueId resultId) throws TException {
+        return FlightSqlQueryCancellation.INSTANCE.cancel(resultId);
     }
 
     @Override

@@ -57,6 +57,7 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.analyzer.Scope;
 import org.apache.doris.nereids.analyzer.UnboundSlot;
+import org.apache.doris.nereids.analyzer.UnboundVariable;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.glue.translator.ExpressionTranslator;
 import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
@@ -67,7 +68,6 @@ import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.SubqueryExpr;
-import org.apache.doris.nereids.trees.expressions.Variable;
 import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
 import org.apache.doris.nereids.trees.expressions.functions.Udf;
 import org.apache.doris.nereids.trees.expressions.functions.scalar.GroupingScalarFunction;
@@ -1130,6 +1130,9 @@ public class CreateTableInfo {
      * analyzeEngine
      */
     public void analyzeEngine() {
+        if (isExternal) {
+            partitionTableInfo.validateExternalPartition(engineName);
+        }
         this.partitionDesc = partitionTableInfo.convertToPartitionDesc(isExternal);
         this.distributionDesc =
             distribution != null ? distribution.translateToCatalogStyle() : null;
@@ -1145,12 +1148,6 @@ public class CreateTableInfo {
                     && distributionDesc != null) {
                 throw new AnalysisException("Create " + engineName
                     + " table should not contain distribution desc");
-            }
-            if (!engineName.equals(ENGINE_HIVE) && !engineName.equals(ENGINE_ICEBERG)
-                    && !engineName.equals(ENGINE_PAIMON) && !engineName.equals(ENGINE_MAXCOMPUTE)
-                    && partitionDesc != null) {
-                throw new AnalysisException("Create " + engineName
-                    + " table should not contain partition desc");
             }
         }
     }
@@ -1276,6 +1273,8 @@ public class CreateTableInfo {
                 throw new AnalysisException("Generated column does not support subquery.");
             } else if (e instanceof Lambda) {
                 throw new AnalysisException("Generated column does not support lambda.");
+            } else if (e instanceof UnboundVariable) {
+                throw new AnalysisException("Generated column expression cannot contain variable.");
             }
         });
     }
@@ -1283,9 +1282,7 @@ public class CreateTableInfo {
     void checkExpressionInGeneratedColumn(Expression expr, ColumnDefinition column,
             Map<String, ColumnDefinition> nameToColumnDefinition) {
         expr.foreach(e -> {
-            if (e instanceof Variable) {
-                throw new AnalysisException("Generated column expression cannot contain variable.");
-            } else if (e instanceof Slot && nameToColumnDefinition.containsKey(((Slot) e).getName())) {
+            if (e instanceof Slot && nameToColumnDefinition.containsKey(((Slot) e).getName())) {
                 ColumnDefinition columnDefinition = nameToColumnDefinition.get(((Slot) e).getName());
                 if (columnDefinition.getAutoIncInitValue() != -1) {
                     throw new AnalysisException(
